@@ -1,7 +1,7 @@
 *-----------------------------------------------------------------------
 *.specification
 
-      subroutine b2news_m (nCv, nFc, nVx, ns, nscx, iscx,
+      subroutine b2news_m_baseline (nCv, nFc, nVx, ns, nscx, iscx,
      &  nscxmax, ismain, ismain0, dtim, switch, geo, mpg,
      &  st, st_ext, st_avg, ramp_call)
       use b2mod_types
@@ -818,4 +818,4 @@ csw 26oct2011 recalculate rescaling factors sclrtio/sclalph (SOLPS4)
 *-----------------------------------------------------------------------
 *.end b2news_m
 
-      end subroutine b2news_m
+      end subroutine b2news_m_baseline

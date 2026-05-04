@@ -1,7 +1,7 @@
 *-----------------------------------------------------------------------
 *.specification
 
-      subroutine b2mndt (nout, nCv, nFc, nVx, ns,
+      subroutine b2mndt_baseline (nout, nCv, nFc, nVx, ns,
      . ismain, ismain0, nscx, nscxmax, iscx, itim, dtim, ntim, switch,
      . geo, mpg, st, st_ext, st_avg, ierr)
       use b2mod_types
@@ -612,4 +612,4 @@ ctmp.dpc
 *-----------------------------------------------------------------------
 *.end b2mndt
 
-      end subroutine b2mndt
+      end subroutine b2mndt_baseline
