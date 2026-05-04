@@ -159,7 +159,6 @@
      &        call read_boundary_sources(nCv, ns, switch, itim, mpg)
          endif
 
-         ! todo: continue
          call xertst (0.lt.nCv.and.0.lt.nFc, 'faulty argument nCv, nFc')
          call xertst (1.le.ns, 'faulty argument ns')
          call xertst (0.le.ismain.and.ismain.lt.ns,

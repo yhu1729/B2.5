@@ -38,7 +38,6 @@ contains
     type(StateVector), pointer :: ptr
     type(N_Vector_Ops), pointer :: op
 
-
     this%ctx = ctx
     this%vector => FN_VNewEmpty(this%ctx)
     this%plasma => plasma
