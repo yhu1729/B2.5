@@ -292,22 +292,42 @@
          integer :: is, iCv, ireg
          logical :: new_matrix
 
+         ! "b2xpni" computes ion and electron density.
+         ! In short: st%dv%ni += st%pl%na
          call b2xpni(nCv, ns, st%pl%na, st%dv%ni)
+
+         ! "b2xpnn" computes hydrogenic neutral density.
+         ! In short: st%dv%nn += st%pl%na
          call b2xpnn(nCv, ns, st%pl%na, st%dv%nn)
+
+         ! "b2xpne" computes electron density.
+         ! In short: st%dv%ne += st%rt%rza * st%pl%na + st_ext%ne
          call b2xpne(nCv, ns, st%rt%rza, st%pl%na, st_ext%ne, st%dv%ne)
          call b2xpne(nCv, ns, st%rt%rz2, st%pl%na, st_ext%ne2,
      &     st%dv%ne2)
+
+         ! "b2tral" computes transport coefficients.
+         ! Source (~500 lines): B2.5/src/transport/b2tral.F
          call b2tral(nCv, nFc, nVx, ns, nscx, nscxmax, iscx, ismain,
      &     switch, geo, mpg, st%pl, st%dv, st%rt, st_ext, st%co,
      &     st%co_ns)
+
+         ! "b2tanml" computes anamalous current.
+         ! Source (~100 lines): B2.5/src/transport/b2tanml.F
          call b2tanml(nCv, nFc, nVx, ns, ismain, switch, geo, mpg,
      &     st%co%csig_an, st%pl%po, st%dv%ne, st%pl%na, st%rt%rza,
      &     st%dv%fchanml_a, st%dv%fchanml)
+
+         ! "b2tvspa" computes parallel viscosity current.
+         ! Source (~200 lines): B2.5/src/transport/b2tvspa.F
          call b2tvspa(nCv, nFc, nVx, ns, ismain, switch, geo, mpg,
      &     st%pl%na, st%pl%ua, st%pl%ti, st%rt%rza, st%co%vsaf_cl,
      &     st%co%vsaf_drho, st%co_ns%vsaf_uAdp_albe,
      &     st%co_ns%vsaf_uBdp_al, st%dv%fac_vis, st%dv%fchvispar_a,
      &     st%dv%fchvispar)
+
+         ! "b2tiner" computes inertial current.
+         ! Source (~100 lines): B2.5/src/transport/b2tiner.F
          call b2tiner(nCv, nFc, nVx, ns, ismain, switch, geo, mpg,
      &     st%pl%na, st%pl%ua, st%dv%facdrift, st%dv%fchinert_a,
      &     st%dv%fchinert)
