@@ -1,0 +1,585 @@
+      subroutine b2mndt (nout, nCv, nFc, nVx, ns, ismain, ismain0, nscx,
+     & nscxmax, iscx, itim, dtim, ntim, switch, geo, mpg, st, st_ext,
+     & st_avg, ierr)
+         use b2mod_types
+         use b2mod_constants
+         use b2mod_diag, only: nnatmi, nnmoli, alloc_b2mod_diag
+         use b2mod_time
+         use b2mod_file
+         use b2mod_b2cmpa
+         use b2mod_user_namelist
+         use b2mod_boundary_namelist
+         use b2mod_numerics_namelist
+         use b2mod_equation_sources
+         use b2mod_boundary_sources
+         use b2us_geo
+         use b2us_map
+         use b2us_plasma
+         use b2mod_running_average
+         use b2mod_batch_average, only: batch_av_all
+         use b2mod_switches
+         use b2mod_facdrift_ExB
+
+#ifndef NAGFOR
+         use b2mod_transport_namelist, only: parm_hce, parm_hci,
+     &     parm_dna, parm_dpa, parm_vla, parm_vsa, parm_alf, parm_sig
+         use b2mod_recycle, only:
+     &     int0r, int0l, int3r, int3l, int6r, int6l, int2r, int2l,
+     &     int5r, int5l, int1r, int1l, int4r, int4l, fna_mol
+         use b2mod_b2cmpt, only:
+     &     cfvla, cflim, cfvsa, cfalf, cfdpa, cfsig, cfdna, cfhce, cfhci
+         use b2mod_input_profile, only:
+     &     ndata, no_pflux, tr_ip_new_files, region_flags, tdata,
+     &     tr_ip_elm_count, no_div, addspec, nss, nrr, nkind_coeff,
+     &     nkind_data, poloidal_scaling, transport_ip_filename, nscale,
+     &     transport_ip_time_switch, transport_ip_time_mod
+         use b2mod_tallies, only:
+     &     rrahireg, rranareg, rsahireg, rqradreg, rsanareg, b2bremreg,
+     &     rqahereg, rramoreg, b2radreg, rqbrmreg, rsamoreg, b2exba,
+     &     b2fraa, b2joule, b2visa, b2divue, b2divua, b2exbe
+         use b2us_feedback, only:
+     &     fb_target, fb_rescale, fb_current, cum_volrec, fb_const,
+     &     charge_frac, saved_fb_actuator, saved_fb_prev, dt_prev,
+     &     feedback_namelist_used
+         use b2mod_math, only:
+     &     cutlo, cutll, b2mod_math_initialised, small_r4_constant
+         use b2mod_zhfrtf, only:
+     &     is_i, z2n_xy, nal, ia, av_ualpha, gt_ac, gtalc, avm_u,
+     &     rho_a_rel, gavm_uc, z_to_m1_ast, w_out, htdp_out,
+     &     hwdp_out, rtdpgamma_out, rwdpgamma_out, piu_out
+         use b2mod_b2zhco, only:
+     &     c_hw_save, c_r_ta, c_r_ta_nofl, c_r_wa, c_r_tb, c_r_tb_nofl,
+     &     c_r_wb, c_r_w, tf_ton_mat, amfact
+         use b2mod_b2mrel, only:
+     &     nucl2s, znnucl_int, s2nucl, amnucl, n2, n3, n4, n5, n6, n8,
+     &     n9, n10, n11, n12, n13, n14, n15, n16, mum, rmu, rmd2, mdm,
+     &     amnucl_mdf, n2_mdf, n5_mdf, n6_mdf, n8_mdf, n9_mdf, n10_mdf,
+     &     n11_mdf, n12_mdf, mum_mdf, rmu_mdf, mdm_mdf
+#endif
+
+         use b2mod_ad
+         use b2mod_subsys
+
+         implicit none
+
+#ifdef JET
+         integer nout(0:11)
+#else
+         integer nout(0:10)
+#endif
+
+         integer :: nCv, nFc, nVx, ns, ismain, ismain0, nscx, nscxmax,
+     &     iscx(0:nscxmax-1), itim, ntim
+         integer, save :: ntim_batch = 500
+         integer, save :: ibatch_av_all = 0
+         real(kind=R8) :: dtim
+         type(geometry), intent(in) :: geo
+         type(mapping), intent(inout) :: mpg
+         type(switches), intent(inout) :: switch
+         type(B2State), intent(inout) :: st
+         type(B2StateExt), intent(inout) :: st_ext
+         type(B2Average), intent(inout) :: st_avg
+         integer ierr
+
+         integer :: iCv
+         integer, save :: use_b2srst = 1
+         integer, save :: flag_startup = 0
+         logical :: domoqt, wrong_flow
+         logical :: quit_residual, main_call
+         integer :: istg(0:2), is, k
+         real(kind=R8) :: nasum, na0sum
+         real(kind=R8) :: rz(nCv), wrk0(nCv), wrkf(nFc)
+         logical :: domoit
+         logical :: solving(4), ramp_call
+
+         real(kind=R8) :: b2sasum, damax
+         external xertst, ipgeti, ipgetr, b2sasum, damax
+         external b2xvsg, b2xvps, b2xpne, b2xpni, b2xpnn, b2spel,
+     &     b2spcx, b2sral, b2srdt, b2srst, b2mxzr, b2mxar, b2mxac,
+     &     b2mwqt, b2mwit, b2tral, b2srsm
+
+         call subini('b2mndt')
+         if(ncall_b2mndt .eq. 0) then
+            if(ntim.eq.0) then
+               switch%nstg(0) = 1
+               switch%nstg(1) = 1
+               switch%nstg(2) = 0
+            end if
+            if(switch%no_solve.eq.1) then
+               switch%nstg(0:2)=1
+            end if
+            if(switch%use_eirene .eq. 1) then
+               call alloc_b2mod_diag(nCv, nFc, ns, mpg%nnreg(0), nstrat,
+     &           nnatmi, switch)
+            end if
+            call ipgeti('b2mndt_use_b2srst', use_b2srst)
+            if(switch%equation_sources .ne. 0) then
+               call read_equation_sources(nCv, ns, switch, itim, mpg)
+            end if
+            if(switch%boundary_sources .ne. 0) then
+               call read_boundary_sources(nCv, ns, switch, itim, mpg)
+            end if
+            call ipgeti('b2mndt_av_ntim_batch', ntim_batch)
+            call ipgeti('b2mndt_av_batch_all', ibatch_av_all)
+            if(switch%b2mndt_style .eq. 2) then
+               write(*, *) 'Running in time-dependent mode'
+            end if
+
+            if(switch%b2mndt_ckn .eq. 2) then
+               ts_factor = 2.0_R8
+            else if(switch%b2mndt_bdf .eq. 2) then
+               ts_factor = 3.0_R8/2.0_R8
+            else
+               ts_factor = 1.0_R8
+            end if
+
+            if(switch%b2stbc_boundary_namelist .ge. 1) then
+               ! WG_TODO call initialize_b2mod_boundary(ns,mpg,tim)
+            else
+               call xerrab('b2mndr -- '
+     &           // 'specify BCs using boundary_namelist')
+               ! WG_TODO call alloc_b2mod_boundary(nx, ny, ns, nbcd, nnisod)
+            end if
+         else
+            if(switch%b2stbc_boundary_namelist .ge. 1) then
+               ! WG_TODO call catchup_b2mod_boundary(ns, mpg, tim)
+            endif
+         endif
+         test_residual
+     &     = switch%nstg_areshe .gt. 0.0_R8
+     &       .or. switch%nstg_areshi .gt. 0.0_R8
+     &       .or. switch%nstg_aresco .gt. 0.0_R8
+     &       .or. switch%nstg_aresmo .gt. 0.0_R8
+
+         ! For time-dependent MMS tests
+         if(switch%use_mms .eq. 2 .and. itim .gt. 0) then
+            if(switch%equation_sources .ne. 0)
+     &        call read_equation_sources(nCv, ns, switch, itim, mpg)
+            if(switch%boundary_sources .ne .0)
+     &        call read_boundary_sources(nCv, ns, switch, itim, mpg)
+         endif
+
+         ! todo: continue
+         call xertst (0.lt.nCv.and.0.lt.nFc, 'faulty argument nCv, nFc')
+         call xertst (1.le.ns, 'faulty argument ns')
+         call xertst (0.le.ismain.and.ismain.lt.ns,
+     .    'invalid main plasma species index ismain')
+         call xertst (.not.is_neutral(ismain),
+     .    'invalid main plasma species ismain; must not be neutral')
+         call xertst (0.le.ismain0.and.ismain0.lt.ns,
+     .    'invalid main neutral species index ismain0')
+         call xertst (is_neutral(ismain0).or.ismain.eq.ismain0,
+     .    'invalid main neutral species ismain0; must be neutral')
+
+         call xertst (0.le.itim.and.0.0_R8.lt.dtim,
+     &     'faulty argument itim, dtim')
+
+         call b2xvsg (nCv, geo%cvBb(1,3), 1, 'bb3', '.gt.')
+
+         call b2xvsg (nCv, geo%cvVol, 1, 'vol', '.gt.')
+
+         call b2xvsg (nCv*ns, st%psnc%na, 1, 'na0', '.gt.')
+         call b2xvsg (nCv, st%psnc%te, 1, 'te0', '.gt.')
+         call b2xvsg (nCv, st%psnc%ti, 1, 'ti0', '.gt.')
+         call b2xvsg (nCv, st%psnc%tn, 1, 'tn0', '.gt.')
+
+         call b2xvps (nCv, nFc, ns, st%pl, st%dv)
+
+         if(ncall_b2mndt.gt.0) then
+            call xertst (0.0_R8.le.minval(st%dv%facdrift) .and.
+     &        1.0_R8.ge.maxval(st%dv%facdrift),
+     &      'faulty argument facdrift')
+            call xertst (0.0_R8.le.minval(st%dv%fac_ExB) .and.
+     &        1.0_R8.ge.maxval(st%dv%fac_ExB),
+     &      'faulty argument fac_ExB')
+         else
+            call b2news_facdrift_fac_ExB_init(nFc, mpg, st%dv%fac_ExB,
+     &        st%dv%facdrift, st%dv%fac_vis, switch)
+         endif
+
+         ierr = 0
+         quit_residual = .false.
+
+
+
+         call sfill (nCv*2*ns, 0.0_R8, st%sr%snadt, 1)
+         call sfill (nCv*4*ns, 0.0_R8, st%sr%smodt, 1)
+         call sfill (nCv*4, 0.0_R8, st%sr%shedt, 1)
+         call sfill (nCv*4, 0.0_R8, st%sr%shidt, 1)
+         call sfill (nCv*4, 0.0_R8, st%sr%shndt, 1)
+
+
+         call b2xpni (nCv, ns, st%psnc%na, st%psnc%ni)
+         call b2xpnn (nCv, ns, st%psnc%na, st%psnc%nn)
+
+         nasum = b2sasum(nCv*ns, st%pl%na, 1)
+         na0sum = b2sasum(nCv*ns, st%psnc%na, 1)
+
+         if(switch%density_control.ne.0) then
+            st%dv%ne = st%dv%ne*na0sum/nasum
+            st%pl%na = st%pl%na*na0sum/nasum
+            st%dv%fna = st%dv%fna*na0sum/nasum
+            st%dv%kinrgy = st%dv%kinrgy*na0sum/nasum
+            write(*,*) 'Densities rescaled by :',na0sum/nasum
+         endif
+
+         call b2xpni (nCv, ns, st%pl%na, st%dv%ni)
+         call b2xpnn (nCv, ns, st%pl%na, st%dv%nn)
+
+
+         istg(0) = 0
+    1    if(istg(0).lt.switch%nstg(0) .and. .not.quit_residual) then
+
+            call b2spel (nCv, ns, ev, st%pl%te, st%dv%ne, st%rt)
+
+            do k = 0, nscx-1
+               call b2spcx (nCv, ns, ev, am(iscx(k)), st%pl%ti,
+     &         st%dv%ne,
+     &           st%rt%rlcx(1:nCv,0:1,0:ns-1,k))
+            enddo
+ctmp.dpc
+            if(nscx.ge.1) then
+               write(*,*) 'DPC: b2mndt: rlcx'
+               do k = 0, nscx-1
+                  do is=0, ns-1
+                     write(*, '(a,2i4,1p,2g14.7)')
+     &               'is0,is,rlcx_0,rlcx_1 ',
+     &                    k,is,damax(nCv,st%rt%rlcx(1,0,is,k),1),
+     &                         damax(nCv,st%rt%rlcx(1,1,is,k),1)
+                  enddo
+               enddo
+            else
+               write(*,*) 'DPC: b2mndt: no CX reactions'
+            endif
+ctmp.dpc
+
+            istg(1) = 0
+    2       if(istg(1).lt.switch%nstg(1) .and. .not.quit_residual) then
+
+
+
+
+               call b2xpni (nCv, ns, st%pl%na, st%dv%ni)
+               call b2xpnn (nCv, ns, st%pl%na, st%dv%nn)
+               call b2xpne (nCv, ns, st%rt%rza, st%pl%na, st_ext%ne,
+     .           st%dv%ne)
+               call b2xpne (nCv, ns, st%rt%rz2, st%pl%na, st_ext%ne2,
+     .           st%dv%ne2)
+
+               call b2tral (nCv, nFc, nVx, ns, nscx, nscxmax, iscx,
+     &         ismain,
+     &           switch, geo, mpg, st%pl, st%dv, st%rt, st_ext, st%co,
+     &           st%co_ns)
+
+               call b2tanml (nCv, nFc, nVx, ns, ismain, switch, geo,
+     &         mpg,
+     &           st%co%csig_an, st%pl%po, st%dv%ne, st%pl%na, st%rt%rza,
+     &           st%dv%fchanml_a, st%dv%fchanml)
+               call b2tvspa (nCv, nFc, nVx, ns, ismain, switch, geo,
+     &         mpg,
+     &           st%pl%na, st%pl%ua, st%pl%ti, st%rt%rza, st%co%vsaf_cl,
+     &           st%co%vsaf_drho, st%co_ns%vsaf_uAdp_albe,
+     &           st%co_ns%vsaf_uBdp_al, st%dv%fac_vis,
+     &         st%dv%fchvispar_a,
+     &           st%dv%fchvispar)
+               call b2tiner (nCv, nFc, nVx, ns, ismain, switch, geo,
+     &         mpg,
+     &           st%pl%na, st%pl%ua, st%dv%facdrift,
+     &           st%dv%fchinert_a, st%dv%fchinert)
+               call b2tvspr(nCv, nFc, nVx, ns, ismain, switch, geo, mpg,
+     &           st%pl%po, st%pl%ti, st%pl%na, st%rt%rza, st%co%vsa0,
+     &           st%dv%fac_vis, st%dv%fchvisper_a, st%dv%fchvisper)
+               call b2tvsq (nCv, nFc, nVx, ns, ismain, switch, geo, mpg,
+     &           st%dv%fac_vis, st%dv%ne2, st%rt%rz2, st%dv%lnlam,
+     &         st%pl%te,
+     &           st%pl%ti, st%pl%na, st%dv%ni(:,1), st%rt%rza,
+     &           st%co_ns%vsaf_hAdp_albe, st%co_ns%vsaf_hBdp_al,
+     &           st%co%hcix_c, st%co%hci_a, st%co_ns%hci_al_ast,
+     &           st%dv%fchvisq_a, st%dv%fchvisq)
+               call b2tvskt(nCv, nFc, nVx, ns, ismain, switch, geo, mpg,
+     &           st%pl%po, st%pl%na, st%pl%kt, st%dv%vaecrb,
+     &         st%co%dna_ExB,
+     &           st%dv%fchviskt_a, st%dv%fchviskt)
+
+#ifdef WG_TODO
+               src_ni=0.0_R8
+               src_ne=0.0_R8
+               src_mo=0.0_R8
+               src_ee=0.0_R8
+               src_ei=0.0_R8
+               src_ms=0.0_R8
+               src_es=0.0_R8
+               cor_ni=0.0_R8
+               cor_ne=0.0_R8
+               cor_mo=0.0_R8
+               cor_ee=0.0_R8
+               cor_ei=0.0_R8
+#endif
+
+               wrong_flow = .false.
+               main_call = ntim.ne.0
+               call b2sral (nCv, nFc, nVx, ns,
+     &          nscx, nscxmax, iscx, ismain, ismain0, dtim,
+     &          switch, geo, mpg, st, st_ext, st_avg, wrong_flow,
+     &         main_call)
+               if(wrong_flow) write(*,*)
+     &              'b2mndt: wrong_flow returned from b2sral'
+
+               call b2srsm (nCv, ns, dtim, switch, geo, mpg,
+     &          st%pl%na, st%pl%ua, st%pl%te, st%pl%ti, st%dv%ne,
+     &         st%dv%ni,
+     &          st%dv%nn, st%sr, .true.)
+
+               if(switch%b2mndt_style.eq.2 .and. use_b2srst.eq.1)
+     &          call b2srst (nCv, ns, switch, st%pl%na, st%pl%ua,
+     &           st%pl%te, st%pl%ti, st%pl%tn, st%pl%po, st%dv%ne,
+     &         st%dv%ni,
+     &           st%dv%nn, st%pl%kt, st%pl%zt, st%sr)
+
+
+               if(switch%b2mndt_style.ne.2) then
+
+                  call b2srdt (nCv, ns, dtim, switch, geo, mpg,
+     &             st%psnc%na, st%psnc%ua, st%psnc%te, st%psnc%ti,
+     &             st%psnc%tn, st%psnc%ne, st%psnc%ni, st%psnc%nn,
+     &             st%psnc%kinrgy,
+     &             st%psnc%kt, st%psnc%zt, st%pl%na, st%pl%ua, st%pl%te,
+     &             st%pl%ti, st%pl%tn, st%dv%ne, st%dv%ni, st%dv%nn,
+     &             st%dv%kinrgy, st%pl%kt, st%pl%zt, st%sr, .false.)
+               endif
+
+               if(switch%equation_sources.ne.0) then
+                  do iCv = 1,mpg%nCi
+                     st%sr%sna(iCv,0:1,0:ns-1)
+     &               = st%sr%sna(iCv,0:1,0:ns-1)+
+     &                 geo%cvVol(iCv)*art_sna(iCv,0:1,0:ns-1)
+                     st%sr%smo(iCv,0:3,0:ns-1)
+     &               = st%sr%smo(iCv,0:3,0:ns-1)+
+     &                 geo%cvVol(iCv)*geo%cvHz(iCv)
+     &               *art_smo(iCv,0:3,0:ns-1)
+                     st%sr%she(iCv,0:3) = st%sr%she(iCv,0:3)+
+     &                 geo%cvVol(iCv)*art_she(iCv,0:3)
+                     st%sr%shi(iCv,0:3) = st%sr%shi(iCv,0:3)+
+     &                 geo%cvVol(iCv)*art_shi(iCv,0:3)
+                     st%sr%shn(iCv,0:3) = st%sr%shn(iCv,0:3)+
+     &                 geo%cvVol(iCv)*art_shn(iCv,0:3)
+                     st%sr%sch(iCv,0:3) = st%sr%sch(iCv,0:3)+
+     &                 geo%cvVol(iCv)*art_sch(iCv,0:3)
+                  enddo
+               endif
+
+               if(switch%b2mndt_style.ne.2.and.use_b2srst.eq.1)
+     &          call b2srst (nCv, ns, switch, st%pl%na, st%pl%ua,
+     &            st%pl%te, st%pl%ti, st%pl%tn, st%pl%po, st%dv%ne,
+     &            st%dv%ni,
+     &           st%dv%nn, st%pl%kt, st%pl%zt, st%sr)
+
+
+               istg(2) = 0
+    3          if(istg(2).lt.switch%nstg(2)
+     &         .and. .not.quit_residual) then
+
+                  ramp_call = switch%ramp_slow.eq.0.or.
+     &                        (istg(0)+istg(1)+istg(2)).eq.0
+                  if(switch%b2mndt_style.eq.1) then
+
+                     call b2news_(nCv, nFc, nVx, ns, nscx, iscx,
+     &                nscxmax, ismain, ismain0, dtim, switch,
+     &                geo, mpg, st, st_ext, st_avg, ramp_call)
+
+                  elseif(switch%b2mndt_style.eq.2) then
+
+
+                     if(switch%b2mndt_bdf.eq.2.and.itim.eq.0) then
+                        switch%b2mndt_bdf=1
+                        ts_factor=1.0_R8
+                        if(switch%b2mndt_startup.eq.2) then
+                           switch%b2mndt_ckn=2
+                           ts_factor=2.0_R8
+                        endif
+                        flag_startup=1
+                     endif
+
+                     call b2news_m(nCv, nFc, nVx, ns, nscx, iscx,
+     &                nscxmax, ismain, ismain0, dtim, switch,
+     &                geo, mpg, st, st_ext, st_avg, ramp_call)
+
+                     if(flag_startup.eq.1) then
+                        switch%b2mndt_bdf=2
+                        if(switch%b2mndt_startup.eq.2) then
+                           switch%b2mndt_ckn=1
+                        endif
+                        ts_factor = 3.0_R8/2.0_R8
+                     endif
+
+                  else
+                     call xerrab('b2mndt_style should be 1 or 2')
+                  endif
+                  flush(6)
+
+                  call b2xpne (nCv, ns, st%rt%rza, st%pl%na, st_ext%ne,
+     .             st%dv%ne)
+                  call b2xpne (nCv, ns, st%rt%rz2, st%pl%na, st_ext%ne2,
+     .             st%dv%ne2)
+                  call b2xpni (nCv, ns, st%pl%na, st%dv%ni)
+                  call b2xpnn (nCv, ns, st%pl%na, st%dv%nn)
+
+
+                  call b2mxzr (nCv, ns, mpg, st%dv%resco, st%dv%resmo,
+     &             st%dv%resmt, st%dv%reshe, st%dv%reshi, st%dv%reshn,
+     &             st%dv%respo, st%dv%reskt, st%dv%reszt)
+
+                  call b2mxar (nCv, ns, switch,
+     &             geo, mpg, st%pl, st%dv, st%diag)
+                  quit_residual=test_residual.and.
+     &             ((st%diag%areshe*switch%nstg_areshe).le.
+     &              (switch%nstg_areshe*switch%nstg_areshe)
+     &              .or.switch%nstg_areshe.eq.0.0_R8).and.
+     &             ((st%diag%areshi*switch%nstg_areshi).le.
+     &              (switch%nstg_areshi*switch%nstg_areshi)
+     &              .or.switch%nstg_areshi.eq.0.0_R8).and.
+     &             ((st%diag%aresco(ismain)*switch%nstg_aresco)
+     &              .le.(switch%nstg_aresco*switch%nstg_aresco)
+     &              .or.switch%nstg_aresco.eq.0.0_R8).and.
+     &             ((st%diag%aresmo(ismain)*switch%nstg_aresmo)
+     &              .le.(switch%nstg_aresmo*switch%nstg_aresmo)
+     &              .or.switch%nstg_aresmo.eq.0.0_R8)
+
+                  call b2mxac (nCv, ns, st%dv, st%diag)
+
+                  domoqt = 0.le.switch%b2mndt_moqtlv.and.
+     &             (1.le.switch%b2mndt_moqtlv.or.istg(0).eq.0).and.
+     &             (2.le.switch%b2mndt_moqtlv.or.istg(1).eq.0).and.
+     &             (3.le.switch%b2mndt_moqtlv.or.istg(2).eq.0)
+                  domoit = 0.le.switch%b2mndt_moitlv.and.
+     &             (1.le.switch%b2mndt_moitlv.or.istg(0).eq.0).and.
+     &             (2.le.switch%b2mndt_moitlv.or.istg(1).eq.0).and.
+     &             (3.le.switch%b2mndt_moitlv.or.istg(2).eq.0)
+
+                  if(domoqt) then
+                     if(mod(ncall_b2mndt, switch%ntim_step_out)
+     &               .eq.0) then
+                        call b2mwqt (nout(4), nCv, ns, itim,
+     &                  b2mndt_itcnt,
+     &                   switch, geo, st%pl, st%dv, st%diag)
+                        flush(nout(4))
+                     endif
+                  endif
+
+                  if(domoit) then
+                     call b2mwit (nout(5), nCv, ns, itim, b2mndt_itcnt,
+     &                 st%dv)
+                     flush(nout(5))
+                  endif
+
+                  if(ank_tracing.ne.0) then
+                     if(ncall_b2mndt.eq.0.and.istg(2).eq.0) then
+                        call alloc_b2mod_user(geo, mpg, ns, nlim,
+     &                  nnmoli,
+     &                    switch)
+                        call b2filei(ns,mpg%nnreg(0),switch)
+                     end if
+                     if(mod(itim,ank_tracing).eq.1.or.ank_tracing.eq.1)
+     >                call b2filew(istg(2),mpg%nnreg(0),st%diag)
+                  endif
+
+                  b2mndt_itcnt = b2mndt_itcnt+1
+
+                  istg(2) = istg(2)+1
+                  goto 3
+               else if(ntim.eq.0) then
+                  if(switch%ion_vlct_restrict .ne. 0 ) then
+                     call b2xprz (nCv, ns, mp, am, st%pl%na, rz, st_ext)
+                     call b2xppz (nCv, ns, st%dv%ne, st%pl%na, st%pl%te,
+     &                 st%pl%ti, st%dv%pz, st_ext)
+                     wrk0 = sqrt(st%dv%pz / rz) * geo%cvBb(:, 0)
+     &               / geo%cvBb(:,3)
+                     call intface(nCv, nFc, mpg%fcCv, geo%fcVol, wrk0,
+     &                 st%co%cssb)
+                  else
+                     st%co%cssb = 0.0_R8
+                  endif
+                  do is=0,ns-1
+
+                     call b2xppb (nCv, st%rt%rza(:,is), st%pl%na(:,is),
+     &                st%pl%te, st%pl%ti, st%pl%tn, is, st%dv%pa(:,is))
+
+                     call b2tfnb(nCv, nFc, nVx, is, ismain, switch, geo,
+     &               mpg, st%pl, st%dv, st%co, st%rt, .true.)
+                  enddo
+
+                  call b2tfed (nCv, nFc, nVx, switch, geo, mpg,
+     &             st%dv%facdrift, st%dv%fac_ExB, st%dv%ne, st%pl%te,
+     &             st%pl%po, st%dv%vedia, st%dv%veecrb)
+
+                  call b2xpen(nCv, nFc, ns, mpg, switch, st%dv%fna,
+     &              st%dv%fna_53, st%dv%fne_53, st%dv%fch, st%dv%fhe,
+     &              st%dv%fhi, st%dv%fhn, st%rt%rpt, st%pl%te, st%pl%ti,
+     &              st%pl%tn, st%pl%po, st%dv%fhm, st%dv%fhp, st%dv%fhj,
+     &              st%dv%fht)
+
+                  if(switch%b2sigp_style.eq.2) then
+                     call b2xpve (nCv, nFc, ns, switch, geo, mpg, qe,
+     &                 st%rt%rza, st%rt%rz2, st%co%alfx_c, st%co%sigx_c,
+     &                 st%dv%fch_pi_c, st%pl%po, st%dv%ne,
+     &                 st%pl%te, st%pl%na, st%pl%ua, st_ext, st%dv%ue)
+                  else
+                     wrkf = -st%dv%fch_p(:, 0)
+     &                    / (qe * (geo%fcPbs + b2news_cutlo))
+                     call intcell(nFc, nCv, mpg, mpg%intcellP, wrkf,
+     &                 st%dv%ue)
+                     do is=0,ns-1
+                        st%dv%ue = st%dv%ue
+     &                           + st%rt%rza(:, is) * st%pl%ua(:, is)
+     &                           * st%pl%na(:,is)
+                     enddo
+                     st%dv%ue = st%dv%ue + st_ext%ue*st_ext%ne
+                     st%dv%ue = st%dv%ue/st%dv%ne
+                  endif
+
+                  call b2xpnm (nCv, ns, st%rt%rz2, am, st%pl%na, wrk0)
+                  call b2treq (nCv, switch, geo%cvVol,
+     &             st%pl%te, st%pl%ti, st%dv%ne, st%dv%ni,
+     &             wrk0, st%dv%lnlam, st_ext, st%co%ceqp)
+
+
+                  solving = .false.
+                  call b2npht(nCv, nFc, nVx, ns, switch, geo, mpg,
+     &              ncall_b2news_, ismain, solving, solveee, solveei,
+     &             solveen, solveet, solvepo, solvemo, solvekt, solvezt,
+     &             switch%b2mndt_rxf, dtim, st%pl, st%dv, st%co, st%rt,
+     &             st%sr, st%srw, st%psnl, st_ext)
+               endif
+
+               istg(1) = istg(1)+1
+               goto 2
+            endif
+
+            istg(0) = istg(0)+1
+            goto 1
+         endif
+
+
+         if(switch%use_mms.eq.2.and.
+     &     mod(ncall_b2mndt+1,switch%calc_err_step_out).eq.0
+     &     .and.switch%b2mndt_dummy.eq.0) then
+            call calc_err(nCv, ns, st%pl, switch, itim, mpg)
+         endif
+
+         if(switch%iav_run > 0)
+     .    call running_average(nCv,ns,st%pl,st%srw,st_avg)
+         if(ibatch_av_all > 0)
+     .    call batch_av_all(itim,ntim_batch,nCv,st%pl,ns)
+
+
+         ncall_b2mndt = ncall_b2mndt+1
+
+
+
+
+         if(switch%b2mndt_dummy.eq.1) ncall_b2mndt = 0
+
+         call subend ()
+         return
+
+      end subroutine b2mndt
