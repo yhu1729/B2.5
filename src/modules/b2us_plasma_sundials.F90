@@ -241,7 +241,7 @@ contains
     state_y => cast_as_state_vector(y)
     state_z => cast_as_state_vector(z)
 
-    call state_z%axpby(0.0_8, a, state_x, b, state_y)
+    call state_z%axpby(0.0d0, a, state_x, b, state_y)
   end subroutine op_linear_sum
 
   ! Op: N_VConst
@@ -421,20 +421,20 @@ contains
     t = 1
     do j = 1, size(state_x%plasma%na, 2)
       do i = 1, size(state_x%plasma%na, 1)
-        state_m%plasma%na(i, j) = 0.0_8
-        state_m%plasma%ua(i, j) = 0.0_8
+        state_m%plasma%na(i, j) = 0.0d0
+        state_m%plasma%ua(i, j) = 0.0d0
 
-        if ((state_c%plasma%na(i, j) == 0.0_8) .and. (state_c%plasma%ua(i, j) == 0.0_8)) then
+        if ((state_c%plasma%na(i, j) == 0.0d0) .and. (state_c%plasma%ua(i, j) == 0.0d0)) then
           cycle
         end if
-        test(1) = ((abs(state_c%plasma%na(i, j)) > 1.5_8 .and. state_x%plasma%na(i, j) * state_c%plasma%na(i, j) <= 0.0_8) .or. &
-                   (abs(state_c%plasma%na(i, j)) > 0.5_8 .and. state_x%plasma%na(i, j) * state_c%plasma%na(i, j) < 0.0_8))
-        test(2) = ((abs(state_c%plasma%ua(i, j)) > 1.5_8 .and. state_x%plasma%ua(i, j) * state_c%plasma%ua(i, j) <= 0.0_8) .or. &
-                   (abs(state_c%plasma%ua(i, j)) > 0.5_8 .and. state_x%plasma%ua(i, j) * state_c%plasma%ua(i, j) < 0.0_8))
+        test(1) = ((abs(state_c%plasma%na(i, j)) > 1.5d0 .and. state_x%plasma%na(i, j) * state_c%plasma%na(i, j) <= 0.0d0) .or. &
+                   (abs(state_c%plasma%na(i, j)) > 0.5d0 .and. state_x%plasma%na(i, j) * state_c%plasma%na(i, j) < 0.0d0))
+        test(2) = ((abs(state_c%plasma%ua(i, j)) > 1.5d0 .and. state_x%plasma%ua(i, j) * state_c%plasma%ua(i, j) <= 0.0d0) .or. &
+                   (abs(state_c%plasma%ua(i, j)) > 0.5d0 .and. state_x%plasma%ua(i, j) * state_c%plasma%ua(i, j) < 0.0d0))
         if (all(test)) then
           t = 0
-          state_m%plasma%na(i, j) = 1.0_8
-          state_m%plasma%ua(i, j) = 1.0_8
+          state_m%plasma%na(i, j) = 1.0d0
+          state_m%plasma%ua(i, j) = 1.0d0
         end if
       end do
     end do
