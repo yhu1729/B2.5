@@ -46,7 +46,7 @@
      &     cutlo, cutll, b2mod_math_initialised, small_r4_constant
          use b2mod_wall, only: track_species
          use b2mod_zhfrtf, only:
-     &     is_i, z2n_xy, nal, ia, av_ualpha, gt_ac, gtalc, avm_u,
+     &     is_i, nal, ia, av_ualpha, gt_ac, gtalc, avm_u,
      &     rho_a_rel, gavm_uc, z_to_m1_ast, w_out, htdp_out, hwdp_out,
      &     rtdpgamma_out, rwdpgamma_out, piu_out
          use b2mod_b2zhco, only:
