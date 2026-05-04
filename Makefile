@@ -389,7 +389,7 @@ MODLIST += ${MODLOCAL}/*.F
 MODLISTF += ${MODLOCAL}/*.F
 endif
 MODLIST += ${SRCDIR}/*/b2mod_*.F ${SRCDIR}/*/b2us_*.F ${SRCDIR}/*/b2mod_*.F90 ${SRCDIR}/ids/*.F90
-MODLISTF += ${SRCDIR}/*/b2mod_*.F ${SRCDIR}/*/b2us_*.F
+MODLISTF += ${SRCDIR}/*/b2mod_*.F ${SRCDIR}/*/b2us_*.F ${SRCDIR}/*/b2us_*.F90
 MODLISTF90 += ${SRCDIR}/*/b2mod_*.F90 ${SRCDIR}/ids/*.F90
 else
 MODLIST += ${DIFFPATH}/b2mod_*.F ${DIFFPATH}/b2mod_*.F90 ${DIFFPATH}/b2us_*.F90
