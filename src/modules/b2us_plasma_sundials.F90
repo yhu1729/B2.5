@@ -17,7 +17,9 @@ module b2us_plasma_sundials
 
   contains
 
+    procedure :: destroy
     procedure :: initialize
+    procedure :: clone
     procedure :: set
     procedure :: find_absolute_value
     procedure :: scale
@@ -30,6 +32,21 @@ module b2us_plasma_sundials
 
 contains
 
+  ! Destroy StateVector
+  subroutine destroy(this)
+    class(StateVector), intent(inout), target :: this
+
+    deallocate(this%plasma%na)
+    deallocate(this%plasma%ua)
+    deallocate(this%plasma%po)
+    deallocate(this%plasma%te)
+    deallocate(this%plasma%ti)
+    deallocate(this%plasma%tn)
+    deallocate(this%plasma%kt)
+    deallocate(this%plasma%zt)
+    deallocate(this%plasma)
+  end subroutine destroy
+
   ! Initialize StateVector
   subroutine initialize(this, ctx, plasma)
     class(StateVector), intent(inout), target :: this
@@ -41,7 +58,10 @@ contains
     this%ctx = ctx
     this%vector => FN_VNewEmpty(this%ctx)
     this%plasma => plasma
-    this%length = size(this%plasma%na) + size(this%plasma%ua)
+    this%length = size(this%plasma%na) + size(this%plasma%ua) &
+                + size(this%plasma%po) + size(this%plasma%te) &
+                + size(this%plasma%ti) + size(this%plasma%tn) &
+                + size(this%plasma%kt) + size(this%plasma%zt)
 
     ptr => this
     this%vector%content = c_loc(ptr)
@@ -70,6 +90,23 @@ contains
     op%nvdotprodmulti = c_funloc(op_dot_product_multiply)
   end subroutine initialize
 
+  ! this = clone(w)
+  subroutine clone(this, w)
+    class(StateVector), intent(inout) :: this
+    class(StateVector), intent(in) :: w
+    type(StateVector), pointer :: state_w
+
+    allocate(this%plasma)
+    allocate(this%plasma%na, mold=w%plasma%na)
+    allocate(this%plasma%ua, mold=w%plasma%ua)
+    allocate(this%plasma%po, mold=w%plasma%po)
+    allocate(this%plasma%te, mold=w%plasma%te)
+    allocate(this%plasma%ti, mold=w%plasma%ti)
+    allocate(this%plasma%tn, mold=w%plasma%tn)
+    allocate(this%plasma%kt, mold=w%plasma%kt)
+    allocate(this%plasma%zt, mold=w%plasma%zt)
+  end subroutine clone
+
   ! this = c
   subroutine set(this, c)
     class(StateVector), intent(inout) :: this
@@ -77,6 +114,12 @@ contains
 
     this%plasma%na = c
     this%plasma%ua = c
+    this%plasma%po = c
+    this%plasma%te = c
+    this%plasma%ti = c
+    this%plasma%tn = c
+    this%plasma%kt = c
+    this%plasma%zt = c
   end subroutine set
 
   ! this = abs(x)
@@ -86,6 +129,12 @@ contains
 
     this%plasma%na = abs(x%plasma%na)
     this%plasma%ua = abs(x%plasma%ua)
+    this%plasma%po = abs(x%plasma%po)
+    this%plasma%te = abs(x%plasma%te)
+    this%plasma%ti = abs(x%plasma%ti)
+    this%plasma%tn = abs(x%plasma%tn)
+    this%plasma%kt = abs(x%plasma%kt)
+    this%plasma%zt = abs(x%plasma%zt)
   end subroutine find_absolute_value
 
   ! this = alpha * x
@@ -96,6 +145,12 @@ contains
 
     this%plasma%na = alpha * x%plasma%na
     this%plasma%ua = alpha * x%plasma%ua
+    this%plasma%po = alpha * x%plasma%po
+    this%plasma%te = alpha * x%plasma%te
+    this%plasma%ti = alpha * x%plasma%ti
+    this%plasma%tn = alpha * x%plasma%tn
+    this%plasma%kt = alpha * x%plasma%kt
+    this%plasma%zt = alpha * x%plasma%zt
   end subroutine scale
 
   ! this = this + alpha * x
@@ -106,6 +161,12 @@ contains
 
     this%plasma%na = this%plasma%na + alpha * x%plasma%na
     this%plasma%ua = this%plasma%ua + alpha * x%plasma%ua
+    this%plasma%po = this%plasma%po + alpha * x%plasma%po
+    this%plasma%te = this%plasma%te + alpha * x%plasma%te
+    this%plasma%ti = this%plasma%ti + alpha * x%plasma%ti
+    this%plasma%tn = this%plasma%tn + alpha * x%plasma%tn
+    this%plasma%kt = this%plasma%kt + alpha * x%plasma%kt
+    this%plasma%zt = this%plasma%zt + alpha * x%plasma%zt
   end subroutine add
 
   ! this = x * y
@@ -116,6 +177,12 @@ contains
 
     this%plasma%na = x%plasma%na * y%plasma%na
     this%plasma%ua = x%plasma%ua * y%plasma%ua
+    this%plasma%po = x%plasma%po * y%plasma%po
+    this%plasma%te = x%plasma%te * y%plasma%te
+    this%plasma%ti = x%plasma%ti * y%plasma%ti
+    this%plasma%tn = x%plasma%tn * y%plasma%tn
+    this%plasma%kt = x%plasma%kt * y%plasma%kt
+    this%plasma%zt = x%plasma%zt * y%plasma%zt
   end subroutine multiply
 
   ! this = x / y
@@ -126,6 +193,12 @@ contains
 
     this%plasma%na = x%plasma%na / y%plasma%na
     this%plasma%ua = x%plasma%ua / y%plasma%ua
+    this%plasma%po = x%plasma%po / y%plasma%po
+    this%plasma%te = x%plasma%te / y%plasma%te
+    this%plasma%ti = x%plasma%ti / y%plasma%ti
+    this%plasma%tn = x%plasma%tn / y%plasma%tn
+    this%plasma%kt = x%plasma%kt / y%plasma%kt
+    this%plasma%zt = x%plasma%zt / y%plasma%zt
   end subroutine divide
 
   ! this = 1 / x
@@ -133,8 +206,14 @@ contains
     class(StateVector), intent(inout) :: this
     class(StateVector), intent(in) :: x
 
-    this%plasma%na = 1.0 / x%plasma%na
-    this%plasma%ua = 1.0 / x%plasma%ua
+    this%plasma%na = 1.0d0 / x%plasma%na
+    this%plasma%ua = 1.0d0 / x%plasma%ua
+    this%plasma%po = 1.0d0 / x%plasma%po
+    this%plasma%te = 1.0d0 / x%plasma%te
+    this%plasma%ti = 1.0d0 / x%plasma%ti
+    this%plasma%tn = 1.0d0 / x%plasma%tn
+    this%plasma%kt = 1.0d0 / x%plasma%kt
+    this%plasma%zt = 1.0d0 / x%plasma%zt
   end subroutine inverse
 
   ! this = s * this + alpha * x + beta * y
@@ -152,6 +231,24 @@ contains
     this%plasma%ua = s * this%plasma%ua &
                    + alpha * x%plasma%ua &
                    + beta * y%plasma%ua
+    this%plasma%po = s * this%plasma%po &
+                   + alpha * x%plasma%po &
+                   + beta * y%plasma%po
+    this%plasma%te = s * this%plasma%te &
+                   + alpha * x%plasma%te &
+                   + beta * y%plasma%te
+    this%plasma%ti = s * this%plasma%ti &
+                   + alpha * x%plasma%ti &
+                   + beta * y%plasma%ti
+    this%plasma%tn = s * this%plasma%tn &
+                   + alpha * x%plasma%tn &
+                   + beta * y%plasma%tn
+    this%plasma%kt = s * this%plasma%kt &
+                   + alpha * x%plasma%kt &
+                   + beta * y%plasma%kt
+    this%plasma%zt = s * this%plasma%zt &
+                   + alpha * x%plasma%zt &
+                   + beta * y%plasma%zt
   end subroutine axpby
 
   ! Cast to StateVector
@@ -194,9 +291,9 @@ contains
     v => FN_VNewEmpty(state_w%ctx)
     ierr = FN_VCopyOps(w, v)
     allocate(state_v)
+
     allocate(state_v%plasma)
-    allocate(state_v%plasma%na, mold=state_w%plasma%na)
-    allocate(state_v%plasma%ua, mold=state_w%plasma%ua)
+    call state_v%clone(state_w)
     v%content = c_loc(state_v)
     v_ptr = c_loc(v)
   end function op_clone
@@ -208,9 +305,7 @@ contains
 
     state_v => cast_as_state_vector(v)
 
-    deallocate(state_v%plasma%na)
-    deallocate(state_v%plasma%ua)
-    deallocate(state_v%plasma)
+    call state_v%destroy()
   end subroutine op_destroy
 
   ! Op: N_VSpace
@@ -334,13 +429,19 @@ contains
     type(N_Vector), intent(in) :: z
     type(StateVector), pointer :: state_x
     type(StateVector), pointer :: state_z
-    real(c_double), dimension(2) :: tmp
+    real(c_double), dimension(8) :: tmp
 
     state_x => cast_as_state_vector(x)
     state_z => cast_as_state_vector(z)
 
     tmp(1) = sum(state_x%plasma%na * state_z%plasma%na)
     tmp(2) = sum(state_x%plasma%ua * state_z%plasma%ua)
+    tmp(3) = sum(state_x%plasma%po * state_z%plasma%po)
+    tmp(4) = sum(state_x%plasma%te * state_z%plasma%te)
+    tmp(5) = sum(state_x%plasma%ti * state_z%plasma%ti)
+    tmp(6) = sum(state_x%plasma%tn * state_z%plasma%tn)
+    tmp(7) = sum(state_x%plasma%kt * state_z%plasma%kt)
+    tmp(8) = sum(state_x%plasma%zt * state_z%plasma%zt)
     d = sum(tmp)
   end function op_dot_product
 
@@ -349,12 +450,18 @@ contains
     real(c_double) :: m
     type(N_Vector), intent(in) :: x
     type(StateVector), pointer :: state_x
-    real(c_double), dimension(2) :: tmp
+    real(c_double), dimension(8) :: tmp
 
     state_x => cast_as_state_vector(x)
 
     tmp(1) = maxval(abs(state_x%plasma%na))
     tmp(2) = maxval(abs(state_x%plasma%ua))
+    tmp(3) = maxval(abs(state_x%plasma%po))
+    tmp(4) = maxval(abs(state_x%plasma%te))
+    tmp(5) = maxval(abs(state_x%plasma%ti))
+    tmp(6) = maxval(abs(state_x%plasma%tn))
+    tmp(7) = maxval(abs(state_x%plasma%kt))
+    tmp(8) = maxval(abs(state_x%plasma%zt))
     m = maxval(tmp)
   end function op_max_norm
 
@@ -363,12 +470,18 @@ contains
     real(c_double) :: m
     type(N_Vector), intent(in) :: x
     type(StateVector), pointer :: state_x
-    real(c_double), dimension(2) :: tmp
+    real(c_double), dimension(8) :: tmp
 
     state_x => cast_as_state_vector(x)
 
     tmp(1) = minval(state_x%plasma%na)
     tmp(2) = minval(state_x%plasma%ua)
+    tmp(3) = minval(state_x%plasma%po)
+    tmp(4) = minval(state_x%plasma%te)
+    tmp(5) = minval(state_x%plasma%ti)
+    tmp(6) = minval(state_x%plasma%tn)
+    tmp(7) = minval(state_x%plasma%kt)
+    tmp(8) = minval(state_x%plasma%zt)
     m = minval(tmp)
   end function op_min
 
@@ -386,6 +499,18 @@ contains
             * state_w%plasma%na * state_w%plasma%na)
     m = m + sum(  state_x%plasma%ua * state_x%plasma%ua &
                 * state_w%plasma%ua * state_w%plasma%ua)
+    m = m + sum(  state_x%plasma%po * state_x%plasma%po &
+                * state_w%plasma%po * state_w%plasma%po)
+    m = m + sum(  state_x%plasma%te * state_x%plasma%te &
+                * state_w%plasma%te * state_w%plasma%te)
+    m = m + sum(  state_x%plasma%ti * state_x%plasma%ti &
+                * state_w%plasma%ti * state_w%plasma%ti)
+    m = m + sum(  state_x%plasma%tn * state_x%plasma%tn &
+                * state_w%plasma%tn * state_w%plasma%tn)
+    m = m + sum(  state_x%plasma%kt * state_x%plasma%kt &
+                * state_w%plasma%kt * state_w%plasma%kt)
+    m = m + sum(  state_x%plasma%zt * state_x%plasma%zt &
+                * state_w%plasma%zt * state_w%plasma%zt)
     m = sqrt(m)
   end function op_weighted_l2_norm
 
@@ -399,6 +524,12 @@ contains
 
     m = sum(abs(state_x%plasma%na))
     m = m + sum(abs(state_x%plasma%ua))
+    m = m + sum(abs(state_x%plasma%po))
+    m = m + sum(abs(state_x%plasma%te))
+    m = m + sum(abs(state_x%plasma%ti))
+    m = m + sum(abs(state_x%plasma%tn))
+    m = m + sum(abs(state_x%plasma%kt))
+    m = m + sum(abs(state_x%plasma%zt))
   end function op_l1_norm
 
   ! Op: N_VConstrMask
@@ -412,7 +543,8 @@ contains
     type(StateVector), pointer :: state_m
     integer :: i
     integer :: j
-    logical, dimension(2):: test
+    logical, dimension(2):: test_2D
+    logical, dimension(6):: test_1D
 
     state_c => cast_as_state_vector(c)
     state_x => cast_as_state_vector(x)
@@ -424,19 +556,94 @@ contains
         state_m%plasma%na(i, j) = 0.0d0
         state_m%plasma%ua(i, j) = 0.0d0
 
-        if ((state_c%plasma%na(i, j) == 0.0d0) .and. (state_c%plasma%ua(i, j) == 0.0d0)) then
+        if ((state_c%plasma%na(i, j) == 0.0d0) &
+             .and. (state_c%plasma%ua(i, j) == 0.0d0)) then
           cycle
         end if
-        test(1) = ((abs(state_c%plasma%na(i, j)) > 1.5d0 .and. state_x%plasma%na(i, j) * state_c%plasma%na(i, j) <= 0.0d0) .or. &
-                   (abs(state_c%plasma%na(i, j)) > 0.5d0 .and. state_x%plasma%na(i, j) * state_c%plasma%na(i, j) < 0.0d0))
-        test(2) = ((abs(state_c%plasma%ua(i, j)) > 1.5d0 .and. state_x%plasma%ua(i, j) * state_c%plasma%ua(i, j) <= 0.0d0) .or. &
-                   (abs(state_c%plasma%ua(i, j)) > 0.5d0 .and. state_x%plasma%ua(i, j) * state_c%plasma%ua(i, j) < 0.0d0))
-        if (all(test)) then
+
+        test_2D(1) = ((abs(state_c%plasma%na(i, j)) > 1.5d0 &
+                       .and. state_x%plasma%na(i, j) &
+                         * state_c%plasma%na(i, j) <= 0.0d0) &
+                      .or. (abs(state_c%plasma%na(i, j)) > 0.5d0 &
+                            .and. state_x%plasma%na(i, j) &
+                              * state_c%plasma%na(i, j) < 0.0d0))
+        test_2D(2) = ((abs(state_c%plasma%ua(i, j)) > 1.5d0 &
+                       .and. state_x%plasma%ua(i, j) &
+                         * state_c%plasma%ua(i, j) <= 0.0d0) &
+                      .or. (abs(state_c%plasma%ua(i, j)) > 0.5d0 &
+                            .and. state_x%plasma%ua(i, j) &
+                              * state_c%plasma%ua(i, j) < 0.0d0))
+
+        if (all(test_2D)) then
           t = 0
           state_m%plasma%na(i, j) = 1.0d0
           state_m%plasma%ua(i, j) = 1.0d0
         end if
       end do
+    end do
+
+    do i = 1, size(state_x%plasma%po)
+        state_m%plasma%po(i) = 0.0d0
+        state_m%plasma%te(i) = 0.0d0
+        state_m%plasma%ti(i) = 0.0d0
+        state_m%plasma%tn(i) = 0.0d0
+        state_m%plasma%kt(i) = 0.0d0
+        state_m%plasma%zt(i) = 0.0d0
+
+        if ((state_c%plasma%po(i) == 0.0d0) &
+             .and. (state_c%plasma%te(i) == 0.0d0) &
+             .and. (state_c%plasma%ti(i) == 0.0d0) &
+             .and. (state_c%plasma%tn(i) == 0.0d0) &
+             .and. (state_c%plasma%kt(i) == 0.0d0) &
+             .and. (state_c%plasma%zt(i) == 0.0d0)) then
+          cycle
+        end if
+
+        test_1D(1) = ((abs(state_c%plasma%po(i)) > 1.5d0 &
+                       .and. state_x%plasma%po(i) &
+                         * state_c%plasma%po(i) <= 0.0d0) &
+                      .or. (abs(state_c%plasma%po(i)) > 0.5d0 &
+                            .and. state_x%plasma%po(i) &
+                              * state_c%plasma%po(i) < 0.0d0))
+        test_1D(2) = ((abs(state_c%plasma%te(i)) > 1.5d0 &
+                       .and. state_x%plasma%te(i) &
+                         * state_c%plasma%te(i) <= 0.0d0) &
+                      .or. (abs(state_c%plasma%te(i)) > 0.5d0 &
+                            .and. state_x%plasma%te(i) &
+                              * state_c%plasma%te(i) < 0.0d0))
+        test_1D(3) = ((abs(state_c%plasma%ti(i)) > 1.5d0 &
+                       .and. state_x%plasma%ti(i) &
+                         * state_c%plasma%ti(i) <= 0.0d0) &
+                      .or. (abs(state_c%plasma%ti(i)) > 0.5d0 &
+                            .and. state_x%plasma%ti(i) &
+                              * state_c%plasma%ti(i) < 0.0d0))
+        test_1D(4) = ((abs(state_c%plasma%tn(i)) > 1.5d0 &
+                       .and. state_x%plasma%tn(i) &
+                         * state_c%plasma%tn(i) <= 0.0d0) &
+                      .or. (abs(state_c%plasma%tn(i)) > 0.5d0 &
+                            .and. state_x%plasma%tn(i) &
+                              * state_c%plasma%tn(i) < 0.0d0))
+        test_1D(5) = ((abs(state_c%plasma%kt(i)) > 1.5d0 &
+                       .and. state_x%plasma%kt(i) &
+                         * state_c%plasma%kt(i) <= 0.0d0) &
+                      .or. (abs(state_c%plasma%kt(i)) > 0.5d0 &
+                            .and. state_x%plasma%kt(i) &
+                              * state_c%plasma%kt(i) < 0.0d0))
+        test_1D(6) = ((abs(state_c%plasma%zt(i)) > 1.5d0 &
+                       .and. state_x%plasma%zt(i) &
+                         * state_c%plasma%zt(i) <= 0.0d0) &
+                      .or. (abs(state_c%plasma%zt(i)) > 0.5d0 &
+                            .and. state_x%plasma%zt(i) &
+                              * state_c%plasma%zt(i) < 0.0d0))
+        if (all(test_2D)) then
+          t = 0
+          state_m%plasma%po(i) = 1.0d0
+          state_m%plasma%te(i) = 1.0d0
+          state_m%plasma%ti(i) = 1.0d0
+          state_m%plasma%tn(i) = 1.0d0
+          state_m%plasma%kt(i) = 1.0d0
+          state_m%plasma%zt(i) = 1.0d0
+        end if
     end do
   end function op_constraint_mask
 
@@ -447,10 +654,16 @@ contains
     type(N_Vector), intent(in) :: denom
     type(StateVector), pointer :: state_num
     type(StateVector), pointer :: state_denom
-    real(c_double), dimension(2) :: tmp
+    real(c_double), dimension(8) :: tmp
 
     tmp(1) = minval(state_num%plasma%na / state_denom%plasma%na)
-    tmp(2) = minval(state_num%plasma%na / state_denom%plasma%na)
+    tmp(2) = minval(state_num%plasma%ua / state_denom%plasma%ua)
+    tmp(3) = minval(state_num%plasma%po / state_denom%plasma%po)
+    tmp(4) = minval(state_num%plasma%te / state_denom%plasma%te)
+    tmp(5) = minval(state_num%plasma%ti / state_denom%plasma%ti)
+    tmp(6) = minval(state_num%plasma%tn / state_denom%plasma%tn)
+    tmp(7) = minval(state_num%plasma%kt / state_denom%plasma%kt)
+    tmp(8) = minval(state_num%plasma%zt / state_denom%plasma%zt)
     minq = minval(tmp)
   end function op_min_quotient
 
@@ -492,7 +705,7 @@ contains
     integer(c_int) :: i
     type(N_Vector), pointer :: y
     type(StateVector), pointer :: state_y
-    real(c_double), dimension(2) :: tmp
+    real(c_double), dimension(8) :: tmp
 
     state_x => cast_as_state_vector(x)
     do i = 1, nv
@@ -500,6 +713,12 @@ contains
       state_y => cast_as_state_vector(y)
       tmp(1) = sum(state_x%plasma%na * state_y%plasma%na)
       tmp(2) = sum(state_x%plasma%ua * state_y%plasma%ua)
+      tmp(3) = sum(state_x%plasma%po * state_y%plasma%po)
+      tmp(4) = sum(state_x%plasma%te * state_y%plasma%te)
+      tmp(5) = sum(state_x%plasma%ti * state_y%plasma%ti)
+      tmp(6) = sum(state_x%plasma%tn * state_y%plasma%tn)
+      tmp(7) = sum(state_x%plasma%kt * state_y%plasma%kt)
+      tmp(8) = sum(state_x%plasma%zt * state_y%plasma%zt)
       d(i) = sum(tmp)
     end do
 
