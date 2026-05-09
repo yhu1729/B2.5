@@ -416,6 +416,7 @@ else
 ALLOBJS = ${OBJS:%.o=${OBJDIR}/%.o}
 endif
 
+PROG_FIRE = b2fire.exe
 PROG_GE = b2pl.exe
 PROG_GR = b2yg.exe b2yi.exe b2ym.exe b2yn.exe b2yp.exe b2yq.exe b2yr.exe
 PROG_MN = b2mn.exe b2mnastra.exe
@@ -440,9 +441,9 @@ PROG_OPT = b2optim_${OPT}.exe
 endif
 OPTEXCL = b2optim_tao.exe
 
-EXCLUDELIST = ${patsubst %.exe, %\\.o, ${PROG_GE} ${PROG_GR} ${PROG_MN} ${PROG_AM} ${PROG_XD} ${PROG_OE} ${PROG_CO} ${PROG_OT} ${PROG_90} ${PROG_MD} ${PROG_OP} ${PROG_OQ} ${PROG_ID} ${PROG_TT} ${PROG_MND} ${PROG_MNB} ${OPTEXCL}}
-EXELIST = ${patsubst %.exe, %.o, ${PROG_GE} ${PROG_GR} ${PROG_MN} ${PROG_AM} ${PROG_XD} ${PROG_OE} ${PROG_CO} ${PROG_OT} ${PROG_MD} ${PROG_OP} ${PROG_OQ}}
-EX90LIST = ${patsubst %.exe, %.o, ${PROG_90} ${PROG_ID}}
+EXCLUDELIST = ${patsubst %.exe, %\\.o, ${PROG_FIRE} ${PROG_GE} ${PROG_GR} ${PROG_MN} ${PROG_AM} ${PROG_XD} ${PROG_OE} ${PROG_CO} ${PROG_OT} ${PROG_90} ${PROG_MD} ${PROG_OP} ${PROG_OQ} ${PROG_ID} ${PROG_TT} ${PROG_MND} ${PROG_MNB} ${OPTEXCL}}
+EXELIST = ${patsubst %.exe, %.o, ${PROG_FIRE} ${PROG_GE} ${PROG_GR} ${PROG_MN} ${PROG_AM} ${PROG_XD} ${PROG_OE} ${PROG_CO} ${PROG_OT} ${PROG_MD} ${PROG_OP} ${PROG_OQ}}
+EX90LIST = ${patsubst %.exe, %.o, ${PROG_FIRE} ${PROG_90} ${PROG_ID}}
 ADEXTRA =
 ifdef DIFF_D
 ADEXTRA += ${CONTEXTAD} ${JSONAD}
@@ -457,6 +458,7 @@ ifdef AD_DEBUG
 ADEXTRA = ${DBGAD} ${STACKAD}
 endif
 
+FIREEXE = ${patsubst %.exe, ${OBJDIR}/%.exe, ${PROG_FIRE}}
 GEEXE = ${patsubst %.exe, ${OBJDIR}/%.exe, ${PROG_GE}}
 GREXE = ${patsubst %.exe, ${OBJDIR}/%.exe, ${PROG_GR}}
 XDEXE = ${patsubst %.exe, ${OBJDIR}/%.exe, ${PROG_XD}}
@@ -485,15 +487,15 @@ DBGAD = ${OBJDIR}/adDebug.o
 
 .PHONY: DEFAULT NOPLOT ALL VERSION TANGENT HESS_TGT ADJOINT DIFF_D DIFF_B DIFF_DD AM_FILES mods clean depend listobj tags echo local force test nc2text_simple nc2text ensure_adas
 
-DEFAULT: VERSION AM_FILES ${MNEXE} ${AMEXE} ${OEEXE} ${COEXE} ${OTEXE} ${O9EXE}
-ALL: VERSION AM_FILES ${MNEXE} ${AMEXE} ${OEEXE} ${COEXE} ${OTEXE} ${O9EXE} ${XDEXE}
-NOPLOT: VERSION AM_FILES ${MNEXE} ${AMEXE} ${OEEXE} ${COEXE} ${OTEXE} ${O9EXE}
-DIFF_D: VERSION AM_FILES ${MNDEXE} ${OPTEXE}
-DIFF_B: VERSION AM_FILES ${MNBEXE} ${OPTEXE}
-DIFF_DD: VERSION AM_FILES ${MNHEXE}
-TANGENT: VERSION AM_FILES ${MNDEXE} ${OPTEXE}
-ADJOINT: VERSION AM_FILES ${MNBEXE} ${OPTEXE}
-HESS_TGT: VERSION AM_FILES ${MNHEXE}
+DEFAULT: VERSION AM_FILES ${FIREEXE} ${MNEXE} ${AMEXE} ${OEEXE} ${COEXE} ${OTEXE} ${O9EXE}
+ALL: VERSION AM_FILES ${FIREEXE} ${MNEXE} ${AMEXE} ${OEEXE} ${COEXE} ${OTEXE} ${O9EXE} ${XDEXE}
+NOPLOT: VERSION AM_FILES ${FIREEXE} ${MNEXE} ${AMEXE} ${OEEXE} ${COEXE} ${OTEXE} ${O9EXE}
+DIFF_D: VERSION AM_FILES ${FIREEXE} ${MNDEXE} ${OPTEXE}
+DIFF_B: VERSION AM_FILES ${FIREEXE} ${MNBEXE} ${OPTEXE}
+DIFF_DD: VERSION AM_FILES ${FIREEXE} ${MNHEXE}
+TANGENT: VERSION AM_FILES ${FIREEXE} ${MNDEXE} ${OPTEXE}
+ADJOINT: VERSION AM_FILES ${FIREEXE} ${MNBEXE} ${OPTEXE}
+HESS_TGT: VERSION AM_FILES ${FIREEXE} ${MNHEXE}
 ifdef NCARG_ROOT
 ifeq ($(strip ${GLI_HOME}),)
 $(warning B2.5 graphical post-processing programs may not work because GLI_HOME is not defined.)
@@ -526,7 +528,7 @@ ALL: ${NCEXE} ${NREXE} nc2text
 NOPLOT: ${NCEXE} ${NREXE} nc2text
 endif
 endif
-MAIN: VERSION AM_FILES ${MNEXE}
+MAIN: VERSION AM_FILES ${FIREEXE} ${MNEXE}
 ifdef SOLPSTOP
 DEFAULT: ensure_adas
 ALL: ensure_adas
@@ -1065,6 +1067,9 @@ endif
 endif
 endif
 
+${FIREEXE}: ${OBJDIR}/%.exe: ${OBJDIR}/%.o ${OBJDIR}/libb2.a ${MNEXTRA} ${MAKES}
+	${LD} ${LDOPTS} ${LPOPTS} ${FFLAGSEXTRA} -o $@ ${OBJDIR}/$*.o ${OBJDIR}/libb2.a ${EIRLIBS} ${IMASLIBS} ${PLLIBES} ${LDLIBES} ${LD_CATALYST} ${LDOPTSend}
+
 ${MNEXE}: ${OBJDIR}/%.exe: ${OBJDIR}/%.o ${OBJDIR}/libb2.a ${MNEXTRA} ${MAKES}
 	${LD} ${LDOPTS} ${LPOPTS} ${FFLAGSEXTRA} -o $@ ${OBJDIR}/$*.o ${OBJDIR}/libb2.a ${EIRLIBS} ${IMASLIBS} ${PLLIBES} ${LDLIBES} ${LD_CATALYST} ${LDOPTSend}
 
@@ -1457,6 +1462,7 @@ echo:
 	@echo EXCLUDELIST=${EXCLUDELIST}
 	@echo EXELIST=${EXELIST}
 	@echo EX90LIST=${EX90LIST}
+	@echo FIREEXE=${FIREEXE}
 	@echo GREXE=${GREXE}
 	@echo MNEXE=${MNEXE}
 	@echo AMEXE=${AMEXE}
