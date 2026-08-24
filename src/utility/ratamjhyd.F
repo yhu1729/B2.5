@@ -333,17 +333,17 @@ c     Input/output variables
       CHARACTER :: FILNAM*8,H123*4,REAC*9,CRC*3
 
 c     Local variables
-      integer ir,i,j,k,it,jn,iu,iv,ii
+      integer ir,i,j,k,it,jn,iu,iv,ii,allocation_status
       real (kind=R8) ::
      1 tef,def,tei,dej,dnnn,duder,
      2 dlog,vmin,vmax,Emin
       integer, parameter :: nv=100
       real (kind=R8) ::
      1 v(1:nv),vf(1:nv+1),t(1:2*nv),dt(1:2*nv),du(0:1),
-     2 energy(1:2*nv,1:2*nv,1:2*nv), s(1:2*nv,1:2*nv,1:2*nv),
-     3 sv(1:2*nv,1:2*nv,1:2*nv),smo(0:nt,0:1),
-     4 eei(1:2*nv,1:2*nv,1:2*nv),eef(1:2*nv,1:2*nv,1:2*nv),
-     5 mdr(1:2*nv),mpol(1:2*nv)
+     2 smo(0:nt,0:1),mdr(1:2*nv),mpol(1:2*nv)
+      real (kind=R8), allocatable ::
+     1 energy(:,:,:),s(:,:,:),sv(:,:,:),
+     2 eei(:,:,:),eef(:,:,:)
       real (kind=R8) ::
      *  rttt(0:nt), rtnt(0:nn)
       data duder/2e3_R8/
@@ -400,6 +400,16 @@ c     Local variables
       CALL SLREAC_b2plot(IR,FILNAM,H123,REAC,CRC)
       select case (H123)
        case ('H.1')
+        allocate(energy(2*nv,2*nv,2*nv),
+     1           s(2*nv,2*nv,2*nv),
+     2           sv(2*nv,2*nv,2*nv),
+     3           eei(2*nv,2*nv,2*nv),
+     4           eef(2*nv,2*nv,2*nv),
+     5           stat=allocation_status)
+        if (allocation_status.ne.0) then
+          call xerrab
+     1      ('get_amjhyd_rates: unable to allocate CX work arrays')
+        endif
         write(*,*) 'Calculate momentum-linearized CX-rate coefficient'
 *   ..Truncate tables to user-defined bounds
         rttt = rtt*am !Conversion of ion temperature per atomic mass unit to ion temperature
@@ -533,6 +543,7 @@ c       write (*,*) (smo(it,1),it=0,nt)
 c       write(*,*) 'rates(:,0)'
 c       write (*,*) (rates(it,0),it=0,nt)
         rates = spread(rates(:,0),2,nn+1)
+        deallocate(energy,s,sv,eei,eef)
 
 c       write(*,*) 'CX rate table'
 c       do it = 0,nt
