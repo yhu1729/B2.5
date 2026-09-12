@@ -299,11 +299,7 @@ contains
                 status = B2_KINSOL_SUCCESS
             end select
         case default
-            if (n_active_callback .gt. 0) then
-                status = B2_KINSOL_FATAL
-            else
-                status = B2_KINSOL_FALLBACK
-            end if
+            status = B2_KINSOL_FALLBACK
         end select
 
 900 continue
