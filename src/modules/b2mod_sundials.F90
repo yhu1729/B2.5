@@ -56,9 +56,17 @@ module b2mod_sundials
     integer, save :: active_ismain = 0
     integer, save :: active_ismain0 = 0
     integer, save :: active_state_size = 0
+    integer, save :: active_sral = 0
     integer, save :: workspace_state_size = 0
     integer, allocatable, save :: active_iscx(:)
     real(R8), save :: active_dtim = 0.0_R8
+    real(R8), save :: active_trust_radius = 0.0_R8
+    real(R8), save :: active_rxf = 0.0_R8
+    real(R8), save :: active_fnorm_floor = 0.0_R8
+    real(R8), save :: active_fnorm_rtol = 0.0_R8
+    real(R8), save :: active_residual_first = 0.0_R8
+    real(R8), save :: active_residual_min = 0.0_R8
+    real(R8), save :: active_residual_last = 0.0_R8
     real(R8), allocatable, save :: scale_na(:), scale_ua(:)
     real(R8), allocatable, save :: unpack_buffer(:)
     real(R8), save :: scale_po = 1.0_R8
@@ -87,7 +95,10 @@ contains
     subroutine b2_sundials_solve(nCv, nFc, nVx, ns, nscx, &
         iscx, nscxmax, ismain, ismain0, dtim, switch, geo, mpg, st, &
         st_ext, st_avg, max_iteration, maa, fnorm_tolerance, step_tolerance, &
-        damping, n_iteration, n_evaluation, n_sync_evaluation, &
+        damping, fnorm_rtolerance, trust_radius, iteration_rxf, &
+        iteration_sral, &
+        n_iteration, n_evaluation, n_sync_evaluation, &
+        residual_first, residual_min, residual_last, &
         status, kinsol_flag)
         integer, intent(in) :: nCv, nFc, nVx, ns, nscx, nscxmax
         integer, intent(in) :: iscx(0:nscxmax-1), ismain, ismain0
@@ -100,7 +111,10 @@ contains
         type(B2Average), target, intent(in) :: st_avg
         integer, intent(in) :: max_iteration, maa
         real(R8), intent(in) :: fnorm_tolerance, step_tolerance, damping
+        real(R8), intent(in) :: fnorm_rtolerance, trust_radius, iteration_rxf
+        integer, intent(in) :: iteration_sral
         integer, intent(out) :: n_iteration, n_evaluation, n_sync_evaluation
+        real(R8), intent(out) :: residual_first, residual_min, residual_last
         integer, intent(out) :: status, kinsol_flag
 
 #if defined(USE_SUNDIALS)
@@ -109,11 +123,22 @@ contains
         real(c_double), pointer :: state_value(:)
         real(R8) :: effective_fnorm_tolerance, effective_step_tolerance
         real(R8) :: saved_rxf
+        integer :: saved_sral
         logical :: returned_state_is_current, valid
 
         n_iteration = 0
         n_evaluation = 0
         n_sync_evaluation = 0
+        residual_first = 0.0_R8
+        residual_min = 0.0_R8
+        residual_last = 0.0_R8
+        active_residual_first = 0.0_R8
+        active_residual_min = 0.0_R8
+        active_residual_last = 0.0_R8
+        active_trust_radius = trust_radius
+        active_rxf = iteration_rxf
+        active_sral = iteration_sral
+        active_fnorm_rtol = fnorm_rtolerance
         status = B2_KINSOL_FALLBACK
         kinsol_flag = 0
 
@@ -183,6 +208,7 @@ contains
         if (effective_fnorm_tolerance .le. 0.0_R8) then
             effective_fnorm_tolerance = epsilon(1.0_R8)**(1.0_R8/3.0_R8)
         end if
+        active_fnorm_floor = effective_fnorm_tolerance
         flag = FKINSetFuncNormTol(kinsol_memory, &
             real(effective_fnorm_tolerance, c_double))
         if (flag .ne. KIN_SUCCESS) then
@@ -252,12 +278,15 @@ contains
                 end if
 
                 saved_rxf = switch%b2mndt_rxf
+                saved_sral = switch%no_b2sral_call
                 switch%b2mndt_rxf = 0.0_R8
+                if (iteration_sral .eq. 1) switch%no_b2sral_call = 0
                 ncall_b2news_ = active_ncall_b2news
                 call b2news_m(nCv, nFc, nVx, ns, nscx, iscx, nscxmax, ismain, &
                     ismain0, dtim, switch, geo, mpg, st, st_ext, st_avg, &
                     .false.)
                 switch%b2mndt_rxf = saved_rxf
+                switch%no_b2sral_call = saved_sral
                 n_active_sync = 1
             end if
 
@@ -282,7 +311,23 @@ contains
             (status == B2_KINSOL_FATAL .or. &
                 status == B2_KINSOL_FALLBACK)) then
             call unpack_state(initial_state_value, st, valid)
+            if (valid .and. n_active_callback .gt. 0) then
+                saved_rxf = switch%b2mndt_rxf
+                saved_sral = switch%no_b2sral_call
+                switch%b2mndt_rxf = 0.0_R8
+                if (iteration_sral .eq. 1) switch%no_b2sral_call = 0
+                ncall_b2news_ = active_ncall_b2news
+                call b2news_m(nCv, nFc, nVx, ns, nscx, iscx, nscxmax, &
+                    ismain, ismain0, dtim, switch, geo, mpg, st, st_ext, &
+                    st_avg, .false.)
+                switch%b2mndt_rxf = saved_rxf
+                switch%no_b2sral_call = saved_sral
+                n_active_sync = n_active_sync + 1
+            end if
         end if
+        residual_first = active_residual_first
+        residual_min = active_residual_min
+        residual_last = active_residual_last
         if (n_active_callback .gt. 0) then
             ncall_b2news_ = active_ncall_b2news + n_active_callback + &
                 n_active_sync
@@ -294,6 +339,9 @@ contains
         n_iteration = 0
         n_evaluation = 0
         n_sync_evaluation = 0
+        residual_first = 0.0_R8
+        residual_min = 0.0_R8
+        residual_last = 0.0_R8
         status = B2_KINSOL_FATAL
         kinsol_flag = 0
 #endif
@@ -305,6 +353,9 @@ contains
         type(N_Vector) :: sunvec_in, sunvec_out
         type(c_ptr), value :: user_data
         real(c_double), pointer :: value_in(:), value_out(:)
+        integer(c_int) :: tolerance_flag
+        real(R8) :: change, tolerance, saved_rxf
+        integer :: saved_sral
         logical :: valid
 
         flag = -1_c_int
@@ -321,14 +372,38 @@ contains
 
         n_active_callback = n_active_callback + 1
         ncall_b2news_ = active_ncall_b2news
+        saved_rxf = active_switch%b2mndt_rxf
+        saved_sral = active_switch%no_b2sral_call
+        if (active_rxf .gt. 0.0_R8) active_switch%b2mndt_rxf = active_rxf
+        if (active_sral .eq. 1) active_switch%no_b2sral_call = 0
         call b2news_m(active_nCv, active_nFc, active_nVx, active_ns, &
             active_nscx, active_iscx, active_nscxmax, active_ismain, &
             active_ismain0, active_dtim, active_switch, active_geo, &
             active_mpg, active_st, active_st_ext, active_st_avg, .false.)
+        active_switch%b2mndt_rxf = saved_rxf
+        active_switch%no_b2sral_call = saved_sral
         ncall_b2news_ = active_ncall_b2news
 
         call pack_state(active_st, value_out, valid)
         if (.not. valid) return
+
+        change = maxval(abs(real(value_out, R8) - real(value_in, R8)))
+        active_residual_last = change
+        if (n_active_callback .eq. 1) then
+            active_residual_first = change
+            active_residual_min = change
+            if (active_fnorm_rtol .gt. 0.0_R8) then
+                tolerance = max(active_fnorm_floor, &
+                    active_fnorm_rtol * change)
+                if (tolerance .gt. 0.0_R8) then
+                    tolerance_flag = FKINSetFuncNormTol(kinsol_memory, &
+                        real(tolerance, c_double))
+                end if
+            end if
+        else
+            active_residual_min = min(active_residual_min, change)
+        end if
+
         last_output_value = value_out
         last_output_valid = .true.
         flag = 0_c_int
