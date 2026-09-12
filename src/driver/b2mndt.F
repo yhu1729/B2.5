@@ -614,12 +614,15 @@ ctmp.dpc
      >         call b2filew(istg(2),mpg%nnreg(0),st%diag)
             endif
 *      ..update iteration counter
-            if (kinsol_done) then
+            kinsol_work = 0
+            if (kinsol_attempted) then
               kinsol_work = kinsol_n_evaluation +
      &          kinsol_n_sync_evaluation
+            endif
+            if (kinsol_done) then
               b2mndt_itcnt = b2mndt_itcnt + kinsol_work
             else
-              b2mndt_itcnt = b2mndt_itcnt + 1
+              b2mndt_itcnt = b2mndt_itcnt + kinsol_work + 1
             endif
 *      ..end inner iteration
             if (kinsol_done) then
