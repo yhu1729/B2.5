@@ -24,6 +24,10 @@
      & , only : batch_av_all
       use b2mod_switches
       use b2mod_facdrift_ExB
+      use b2mod_sundials
+     & , only : b2_sundials_solve,
+     &          B2_KINSOL_SUCCESS, B2_KINSOL_FATAL, B2_KINSOL_FALLBACK,
+     &          B2_KINSOL_MAXITER, B2_KINSOL_STEP_TOL
 #ifndef NAGFOR
 ! csc The following are not necessary for computation but are needed
 !     for adjoint AD to avoid side-effect variables
@@ -141,9 +145,19 @@
       integer :: iCv
       integer, save :: use_b2srst = 1                                    !srv 13.07.12
       integer, save :: flag_startup = 0                                  !fc: local variable used to start-up BDF2 scheme with an IE first time-step
+      integer, save :: use_kinsol = 0
+      integer, save :: kinsol_maa = 5
+      integer, save :: kinsol_budget = 128
+      real (kind=R8), save :: kinsol_fnorm_tol = 0.0_R8
+      real (kind=R8), save :: kinsol_step_tol = 0.0_R8
+      real (kind=R8), save :: kinsol_damping = 1.0_R8
       logical domoqt, wrong_flow                                         !xpb
-      logical quit_residual, main_call
+      logical quit_residual, main_call,
+     &  kinsol_done, use_kinsol_now, kinsol_attempted
       integer istg(0:2), is, k
+      integer kinsol_n_iteration, kinsol_n_evaluation,
+     &  kinsol_n_sync_evaluation, kinsol_work,
+     &  kinsol_status, kinsol_flag
       real (kind=R8) :: nasum, na0sum
       real (kind=R8) ::
      &  rz(nCv), wrk0(nCv), wrkf(nFc)                                    !iyv 06.02.14
@@ -176,6 +190,25 @@
      &                         switch)
        endif
        call ipgeti ('b2mndt_use_b2srst', use_b2srst)                    !srv 13.07.12
+       call ipgeti ('b2mndt_use_kinsol', use_kinsol)
+       call ipgeti ('b2mndt_kinsol_budget', kinsol_budget)
+       call ipgeti ('b2mndt_kinsol_maa', kinsol_maa)
+       call ipgetr ('b2mndt_kinsol_fnorm_tol', kinsol_fnorm_tol)
+       call ipgetr ('b2mndt_kinsol_step_tol', kinsol_step_tol)
+       call ipgetr ('b2mndt_kinsol_damping', kinsol_damping)
+       call xertst (use_kinsol .eq. 0 .or. use_kinsol .eq. 1,
+     &   'b2mndt_use_kinsol should be 0 or 1')
+       call xertst (kinsol_budget .ge. 1,
+     &   'b2mndt_kinsol_budget should be at least 1')
+       call xertst (kinsol_maa .ge. 0,
+     &   'b2mndt_kinsol_maa should be nonnegative')
+       call xertst (kinsol_fnorm_tol .ge. 0.0_R8,
+     &   'b2mndt_kinsol_fnorm_tol should be nonnegative')
+       call xertst (kinsol_step_tol .ge. 0.0_R8,
+     &   'b2mndt_kinsol_step_tol should be nonnegative')
+       call xertst (kinsol_damping .gt. 0.0_R8. and.
+     &   kinsol_damping .le. 1.0_R8,
+     &   'b2mndt_kinsol_damping should be in (0,1]')
        if(switch%equation_sources.ne.0)
      &  call read_equation_sources(nCv, ns, switch, itim, mpg)
        if(switch%boundary_sources.ne.0)
@@ -417,6 +450,13 @@ ctmp.dpc
 *       (smq is inherently stable.)
 *     ..inner iteration
           istg(2) = 0
+          kinsol_done = .false.
+          kinsol_attempted = .false.
+          use_kinsol_now = use_kinsol .eq. 1 .and.
+     &      switch%b2mndt_style .eq. 2 .and
+     &      .ntim .ne. 0 .and.
+     &      switch%b2mndt_dummy .eq. 0 .and.
+     &      .not. (switch%b2mndt_bdf .eq. 2 .and. itim .eq. 0)
     3     if (istg(2).lt.switch%nstg(2) .and. .not.quit_residual) then
 *      ..basic iterative step
             ramp_call = switch%ramp_slow.eq.0.or.
@@ -439,9 +479,40 @@ ctmp.dpc
 
             elseif (switch%b2mndt_style.eq.2) then
 
-              call b2news_m(nCv, nFc, nVx, ns, nscx, iscx,
-     &         nscxmax, ismain, ismain0, dtim, switch,
-     &         geo, mpg, st, st_ext, st_avg, ramp_call)
+              kinsol_done = .false.
+*      ..Anderson acceleration needs a stationary fixed-point map. Enter
+*        KINSOL when the drift/ExB/viscosity ramps have reached their
+*        targets.
+              if (use_kinsol_now .and.
+     &            .not. kinsol_attempted .and.
+     &            b2news_ramp_is_stationary(switch)) then
+                call b2_sundials_solve(nCv, nFc, nVx, ns, nscx, iscx,
+     &            nscxmax, ismain, ismain0, dtim, switch, geo, mpg, st,
+     &            st_ext, st_avg,
+     &            kinsol_budget, kinsol_maa,
+     &            kinsol_fnorm_tol, kinsol_step_tol, kinsol_damping,
+     &            kinsol_n_iteration, kinsol_n_evaluation,
+     &            kinsol_n_sync_evaluation, kinsol_status, kinsol_flag)
+                kinsol_attempted = .true.
+                use_kinsol_now = .false.
+                if (kinsol_status .eq. B2_KINSOL_FALLBACK) then
+                  use_kinsol_now = .false.
+                elseif (kinsol_status .eq. B2_KINSOL_FATAL) then
+                  call xerrab('KINSOL fail: abort')
+                else
+                  kinsol_done = .true.
+                  if (kinsol_status .ne. B2_KINSOL_SUCCESS .and.
+     &                kinsol_status .ne. B2_KINSOL_MAXITER .and.
+     &                kinsol_status .ne. B2_KINSOL_STEP_TOL) then
+                    call xerrab('invalid KINSOL status')
+                  endif
+                endif
+              endif
+              if (.not. kinsol_done) then
+                call b2news_m(nCv, nFc, nVx, ns, nscx, iscx, nscxmax,
+     &            ismain, ismain0, dtim, switch, geo, mpg, st, st_ext,
+     &            st_avg, ramp_call)
+              endif
 
             else
               call xerrab('b2mndt_style should be 1 or 2')
@@ -519,9 +590,19 @@ ctmp.dpc
      >         call b2filew(istg(2),mpg%nnreg(0),st%diag)
             endif
 *      ..update iteration counter
-            b2mndt_itcnt = b2mndt_itcnt+1
+            if (kinsol_done) then
+              kinsol_work = kinsol_n_evaluation +
+     &          kinsol_n_sync_evaluation
+              b2mndt_itcnt = b2mndt_itcnt + kinsol_work
+            else
+              b2mndt_itcnt = b2mndt_itcnt + 1
+            endif
 *      ..end inner iteration
-            istg(2) = istg(2)+1
+            if (kinsol_done) then
+              istg(2) = istg(2) + max(1, kinsol_work)
+            else
+              istg(2) = istg(2) + 1
+            endif
             goto 3
           else if (ntim.eq.0) then ! compute derived quantities
             if(switch%ion_vlct_restrict .ne. 0 ) then                          !iyv 06.02.14
