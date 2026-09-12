@@ -94,8 +94,9 @@ contains
 
     subroutine b2_sundials_solve(nCv, nFc, nVx, ns, nscx, &
         iscx, nscxmax, ismain, ismain0, dtim, switch, geo, mpg, st, &
-        st_ext, st_avg, max_iteration, maa, fnorm_tolerance, step_tolerance, &
-        damping, fnorm_rtolerance, trust_radius, iteration_rxf, &
+        st_ext, st_avg, max_iteration, maa, fnorm_tolerance, &
+        fnorm_rtolerance, step_tolerance, &
+        damping, trust_radius, iteration_rxf, &
         iteration_sral, &
         n_iteration, n_evaluation, n_sync_evaluation, &
         residual_first, residual_min, residual_last, &
@@ -110,8 +111,8 @@ contains
         type(B2StateExt), target, intent(inout) :: st_ext
         type(B2Average), target, intent(in) :: st_avg
         integer, intent(in) :: max_iteration, maa
-        real(R8), intent(in) :: fnorm_tolerance, step_tolerance, damping
-        real(R8), intent(in) :: fnorm_rtolerance, trust_radius, iteration_rxf
+        real(R8), intent(in) :: fnorm_tolerance, fnorm_rtolerance, &
+            step_tolerance, damping, trust_radius, iteration_rxf
         integer, intent(in) :: iteration_sral
         integer, intent(out) :: n_iteration, n_evaluation, n_sync_evaluation
         real(R8), intent(out) :: residual_first, residual_min, residual_last
