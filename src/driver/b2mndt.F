@@ -201,9 +201,9 @@
        call ipgeti ('b2mndt_kinsol_budget', kinsol_budget)
        call ipgeti ('b2mndt_kinsol_maa', kinsol_maa)
        call ipgetr ('b2mndt_kinsol_fnorm_tol', kinsol_fnorm_tol)
+       call ipgetr ('b2mndt_kinsol_fnorm_rtol', kinsol_fnorm_rtol)
        call ipgetr ('b2mndt_kinsol_step_tol', kinsol_step_tol)
        call ipgetr ('b2mndt_kinsol_damping', kinsol_damping)
-       call ipgetr ('b2mndt_kinsol_fnorm_rtol', kinsol_fnorm_rtol)
        call ipgetr ('b2mndt_kinsol_trust', kinsol_trust)
        call ipgetr ('b2mndt_kinsol_rxf', kinsol_rxf)
        call ipgeti ('b2mndt_kinsol_sral', kinsol_sral)
@@ -215,14 +215,14 @@
      &   'b2mndt_kinsol_maa should be nonnegative')
        call xertst (kinsol_fnorm_tol .ge. 0.0_R8,
      &   'b2mndt_kinsol_fnorm_tol should be nonnegative')
+       call xertst (kinsol_fnorm_rtol .ge. 0.0_R8 .and.
+     &   kinsol_fnorm_rtol .lt. 1.0_R8,
+     &   'b2mndt_kinsol_fnorm_rtol should be in [0,1)')
        call xertst (kinsol_step_tol .ge. 0.0_R8,
      &   'b2mndt_kinsol_step_tol should be nonnegative')
        call xertst (kinsol_damping .gt. 0.0_R8. and.
      &   kinsol_damping .le. 1.0_R8,
      &   'b2mndt_kinsol_damping should be in (0,1]')
-       call xertst (kinsol_fnorm_rtol .ge. 0.0_R8 .and.
-     &   kinsol_fnorm_rtol .lt. 1.0_R8,
-     &   'b2mndt_kinsol_fnorm_rtol should be in [0,1)')
        call xertst (kinsol_trust .ge. 0.0_R8,
      &   'b2mndt_kinsol_trust should be nonnegative')
        call xertst (kinsol_rxf .ge. 0.0_R8 .and.
@@ -511,8 +511,8 @@ ctmp.dpc
      &            nscxmax, ismain, ismain0, dtim, switch, geo, mpg, st,
      &            st_ext, st_avg,
      &            kinsol_budget, kinsol_maa,
-     &            kinsol_fnorm_tol, kinsol_step_tol, kinsol_damping,
-     &            kinsol_fnorm_rtol, kinsol_trust, kinsol_rxf,
+     &            kinsol_fnorm_tol, kinsol_fnorm_rtol, kinsol_step_tol,
+     &            kinsol_damping, kinsol_trust, kinsol_rxf,
      &            kinsol_sral,
      &            kinsol_n_iteration, kinsol_n_evaluation,
      &            kinsol_n_sync_evaluation,
