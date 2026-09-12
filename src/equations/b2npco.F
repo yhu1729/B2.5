@@ -77,7 +77,7 @@
 *   ..local variables
       character chns*3                                                   !srv 04.07.08
       real (kind=R8) ::
-     *   aa(mpg%nCmxNv), wrk0(nCv)
+     *   aa(mpg%nCmxNv), wrk0(nCv), snb(nCv,0:1)
       logical warning
       integer :: iCv
 *   ..procedures
@@ -184,12 +184,13 @@ cdjm Jan2017 update particle source components for balance
         endif
       endif
 
+      snb = sr%sna(:,:,isb)
       if(switch%b2mndt_style.eq.2) then                                  !srv 07.07.21 {
 *  .. calculate time-dependent source
         call b2scdt (nCv, mpg%nCi, isb, dtim,
      &   geo%cvVol, psnl%na(:,isb), switch, mpg, sr%snadt(1,0,isb))
 *  .. add contribution from time-dependent source
-        sr%sna(:,:,isb) = sr%sna(:,:,isb) + sr%snadt(:,:,isb)
+        snb = snb + sr%snadt(:,:,isb)
       endif                                                              !srv 07.07.21 }
 
 * ..particle balance
@@ -197,10 +198,10 @@ cdjm Jan2017 update particle source components for balance
       if((solving.and.any(solvcreg(0:mpg%nnreg(0))))
      &            .or.switch%get_residuals.eq.1) then                    !srv 22.05.18
        if (switch%mdf_fnb.eq.0) then
-        call b2ursc (nCv, nFc, mpg, pl%na(:,isb), sr%sna(:,:,isb),
+        call b2ursc (nCv, nFc, mpg, pl%na(:,isb), snb,
      &    dv%fna(:,:,isb), dv%resco(:,isb))
        else
-        call b2ursc (nCv, nFc, mpg, pl%na(:,isb), sr%sna(:,:,isb),
+        call b2ursc (nCv, nFc, mpg, pl%na(:,isb), snb,
      &    dv%fna_mdf(:,:,isb), dv%resco(:,isb))
        endif
       endif                                                              !srv 22.05.18
@@ -225,7 +226,7 @@ cdjm Jan2017 update particle source components for balance
       if(solving.and.any(solvcreg(0:mpg%nnreg(0)))) then                 !srv 22.05.18
         call b2usco (nCv, nFc, nVx, isb, switch, geo, mpg, nregionv,     !srv 13.10.06 26.09.12
      &   solvcreg, itcnt, rxg_npco, pl%na(:,isb), dv%pa(:,isb),
-     &   sr%sna(:,1,isb), dv%flob(:,:,isb), dv%conb(:,:,:,isb),
+     &   snb(:,1), dv%flob(:,:,isb), dv%conb(:,:,:,isb),
      &   dv%resco(:,isb), dv%corpa(:,isb), aa, 'b2usco_'//chns)
 *   ..apply correction
         call b2upco (nCv, nFc, nVx, geo, mpg, switch, nregionv,
@@ -246,9 +247,9 @@ cdjm Jan2017 update particle source components for balance
         call my_out_us(70,nCv,0,pl%na(1,isb),'b2npco_na'//chns)
         call my_out_us(70,nCv,0,pl%ua(1,isb),'b2npco_ua'//chns)
         call my_out_us(70,nCv,0,dv%resco(1,isb),'b2npco_resco'//chns)
-        call my_out_us(70,nCv,0,sr%sna(1,0,isb),'b2npco_sna0'//chns)
-        call my_out_us(70,nCv,0,sr%sna(1,1,isb),'b2npco_sna1'//chns)
-        wrk0=sr%sna(:,0,isb)+pl%na(:,isb)*sr%sna(:,1,isb)
+        call my_out_us(70,nCv,0,snb(1,0),'b2npco_sna0'//chns)
+        call my_out_us(70,nCv,0,snb(1,1),'b2npco_sna1'//chns)
+        wrk0=snb(:,0)+pl%na(:,isb)*snb(:,1)
         call my_out_us(70,nCv,0,wrk0,'b2npco_sna'//chns)
         !wrk0=-sr%snadt(:,1,isb)*pl%na(:,isb)-sr%snadt(:,0,isb)
         call my_out_us(70,nCv,0,dv%dnadt(1,isb),'b2npco_dnadt'//chns)
@@ -262,7 +263,7 @@ cdjm Jan2017 update particle source components for balance
         write (chns,'(i3.3)') isb
         call my_out_us(70,nCv,0,pl%na(1,isb),'b2npco_na'//chns)
         call my_out_us(70,nCv,0,dv%resco(1,isb),'b2npco_resco'//chns)
-        wrk0=sr%sna(:,0,isb)+pl%na(:,isb)*sr%sna(:,1,isb)
+        wrk0=snb(:,0)+pl%na(:,isb)*snb(:,1)
         call my_out_us(70,nCv,0,wrk0,'b2npco_sna'//chns)
         call my_out_us(70,nFc,1,dv%fna(1,0,isb),'b2npco_fna_th'//chns)
         call my_out_us(70,nFc,1,dv%fna(1,1,isb),'b2npco_fna_r'//chns)
