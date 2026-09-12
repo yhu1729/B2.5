@@ -260,6 +260,23 @@ c old style
       return
       end subroutine b2news_facdrift_fac_ExB_dec
 
+      logical function b2news_ramp_is_stationary(sw)
+      implicit none
+      type (switches), intent (in) :: sw
+      real (kind=R8) :: tolerance
+
+      tolerance = 10.0_R8*epsilon(1.0_R8)
+      b2news_ramp_is_stationary = ncall_drift .gt. 0 .and.
+     &  abs(facdrift_scalar - sw%facdrift_target) .le.
+     &    tolerance * max(1.0_R8, abs(sw%facdrift_target)) .and.
+     &  abs(fac_ExB_scalar - sw%facExB_target) .le.
+     &    tolerance * max(1.0_R8, abs(sw%facExB_target)) .and.
+     &  abs(fac_vis_scalar - sw%facvis_target) .le.
+     &    tolerance * max(1.0_R8, abs(sw%facvis_target))
+
+      return
+      end function b2news_ramp_is_stationary
+
       subroutine b2news_facdrift_fac_ExB_update(nFc, fac_ExB, facdrift,
      &  fac_vis)
       implicit none

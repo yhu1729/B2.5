@@ -87,6 +87,9 @@ IMAS_AMNS_DEBUG = yes
 else
 IMAS_AMNS_DEBUG = no
 endif
+ifdef USE_SUNDIALS
+EXT_SUNDIALS = .sundials
+endif
 ifdef DIFF_D
 EXT_DIFF = .diff_d
 DIFF = yes
@@ -117,7 +120,7 @@ EXT_DIFF = .hess_tgt
 DIFF = yes
 DIFFDIR = src/differentiation/hessian_tgt
 endif
-TOOLCHAIN = ${COMPILER}${EXT_OPENMP}${EXT_MPI}${EXT_IMPGYRO}${EXT_DIFF}${EXT_DEBUG}
+TOOLCHAIN = ${COMPILER}${EXT_OPENMP}${EXT_MPI}${EXT_IMPGYRO}${EXT_DIFF}${EXT_SUNDIALS}${EXT_DEBUG}
 
 # Directory where objectcode/binaries will be created
 OBJDIR = ${SRCB2}/builds/${PREF_OBJDIR}.${HOST_NAME}.${TOOLCHAIN}
@@ -155,6 +158,27 @@ MAKES += ${SRCB2}/config/compile ${SRCB2}/config/config.${HOST_NAME}.${COMPILER}
 ifeq ($(shell [ -e ${SRCB2}/config/config.${HOST_NAME}.${COMPILER}.local ] && echo yes || echo no ),yes)
   include ${SRCB2}/config/config.${HOST_NAME}.${COMPILER}.local
   MAKES += ${SRCB2}/config/config.${HOST_NAME}.${COMPILER}.local
+endif
+
+ifdef USE_SUNDIALS
+SUNDIALS_FC_FLAGS ?=
+SUNDIALS_LD_FLAGS ?=
+ifeq ($(strip ${SUNDIALS_FC_FLAGS}),)
+ifdef SUNDIALS_MOD_DIR
+SUNDIALS_INCLUDE_DIR ?= $(patsubst %/fortran,%/include,${SUNDIALS_MOD_DIR})
+SUNDIALS_FC_FLAGS = -I${SUNDIALS_MOD_DIR} -I${SUNDIALS_INCLUDE_DIR}
+endif
+endif
+ifeq ($(strip ${SUNDIALS_FC_FLAGS}),)
+$(error USE_SUNDIALS requires SUNDIALS_FC_FLAGS or SUNDIALS_MOD_DIR)
+endif
+ifeq ($(strip ${SUNDIALS_LD_FLAGS}),)
+$(error USE_SUNDIALS requires SUNDIALS_LD_FLAGS)
+endif
+DEFINES += -DUSE_SUNDIALS
+SOLPSINCLUDE += ${SUNDIALS_FC_FLAGS}
+INCMODS += ${SUNDIALS_FC_FLAGS}
+LDLIBES += ${SUNDIALS_LD_FLAGS}
 endif
 
 # Verify that some needed variables are defined
@@ -1425,6 +1449,10 @@ endif
 ${OBJDIR}/LISTOBJ: ${SRCDIR}/modules/.new_modules
 	$(MAKE) SKIP_LISTOBJ_INCLUDE=1 listobj
 
+ifdef USE_SUNDIALS
+EXTRA_SOURCES += ${SRCDIR}/modules/b2mod_sundials.F90
+endif
+
 VERSION: ${SRCDIR}/include/git_version_B25.h
 
 # The version header is assembled in a scratch file first, then atomically
@@ -1448,7 +1476,7 @@ else
 endif
 	@if cmp -s ${OBJDIR}/git_version_new.h ${SRCDIR}/include/git_version_B25.h; then rm ${OBJDIR}/git_version_new.h; else mv ${OBJDIR}/git_version_new.h ${SRCDIR}/include/git_version_B25.h; fi
 
-${OBJDIR}/dependencies: ${SRCDIR}/modules/.new_modules
+${OBJDIR}/dependencies: ${SRCDIR}/modules/.new_modules ${EXTRA_SOURCES}
 ifeq ($(shell [ -d ${OBJDIR} ] && echo yes || echo no ),no)
 	-mkdir -p ${OBJDIR}
 endif

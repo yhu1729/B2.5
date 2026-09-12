@@ -66,6 +66,7 @@
       use b2mod_boundary_sources                                        !srv 26.02.18
       use b2mod_switches
       use b2us_map
+      use b2mod_sundials, only : b2_sundials_finalize
       use b2us_geo
       use b2us_plasma
       use b2us_io
@@ -4125,6 +4126,7 @@ cxpb Copy the IDS to a temporary location with the new DD and then bring it back
       endif
       deallocate(old_erosion, old_deposition)
       deallocate(rza0, rz20, rpt0, rpi0)
+      call b2_sundials_finalize
       call dealloc_b2mod_diag
 !WG_RM      call dealloc_b2mod_ma28
       call dealloc_b2mod_mrel
