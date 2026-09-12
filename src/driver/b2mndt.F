@@ -151,6 +151,10 @@
       real (kind=R8), save :: kinsol_fnorm_tol = 0.0_R8
       real (kind=R8), save :: kinsol_step_tol = 0.0_R8
       real (kind=R8), save :: kinsol_damping = 1.0_R8
+      real (kind=R8), save :: kinsol_fnorm_rtol = 0.0_R8
+      real (kind=R8), save :: kinsol_trust = 0.0_R8
+      real (kind=R8), save :: kinsol_rxf = 0.0_R8
+      integer, save :: kinsol_sral = 1
       logical domoqt, wrong_flow                                         !xpb
       logical quit_residual, main_call,
      &  kinsol_done, use_kinsol_now, kinsol_attempted
@@ -158,6 +162,8 @@
       integer kinsol_n_iteration, kinsol_n_evaluation,
      &  kinsol_n_sync_evaluation, kinsol_work,
      &  kinsol_status, kinsol_flag
+      real (kind=R8) :: kinsol_res_first, kinsol_res_min,
+     &  kinsol_res_last
       real (kind=R8) :: nasum, na0sum
       real (kind=R8) ::
      &  rz(nCv), wrk0(nCv), wrkf(nFc)                                    !iyv 06.02.14
@@ -196,6 +202,10 @@
        call ipgetr ('b2mndt_kinsol_fnorm_tol', kinsol_fnorm_tol)
        call ipgetr ('b2mndt_kinsol_step_tol', kinsol_step_tol)
        call ipgetr ('b2mndt_kinsol_damping', kinsol_damping)
+       call ipgetr ('b2mndt_kinsol_fnorm_rtol', kinsol_fnorm_rtol)
+       call ipgetr ('b2mndt_kinsol_trust', kinsol_trust)
+       call ipgetr ('b2mndt_kinsol_rxf', kinsol_rxf)
+       call ipgeti ('b2mndt_kinsol_sral', kinsol_sral)
        call xertst (use_kinsol .eq. 0 .or. use_kinsol .eq. 1,
      &   'b2mndt_use_kinsol should be 0 or 1')
        call xertst (kinsol_budget .ge. 1,
@@ -209,6 +219,16 @@
        call xertst (kinsol_damping .gt. 0.0_R8. and.
      &   kinsol_damping .le. 1.0_R8,
      &   'b2mndt_kinsol_damping should be in (0,1]')
+       call xertst (kinsol_fnorm_rtol .ge. 0.0_R8 .and.
+     &   kinsol_fnorm_rtol .lt. 1.0_R8,
+     &   'b2mndt_kinsol_fnorm_rtol should be in [0,1)')
+       call xertst (kinsol_trust .ge. 0.0_R8,
+     &   'b2mndt_kinsol_trust should be nonnegative')
+       call xertst (kinsol_rxf .ge. 0.0_R8 .and.
+     &   kinsol_rxf .le. 1.0_R8,
+     &   'b2mndt_kinsol_rxf should be in [0,1]')
+       call xertst (kinsol_sral .eq. 0 .or. kinsol_sral .eq. 1,
+     &   'b2mndt_kinsol_sral should be 0 or 1')
        if(switch%equation_sources.ne.0)
      &  call read_equation_sources(nCv, ns, switch, itim, mpg)
        if(switch%boundary_sources.ne.0)
@@ -491,8 +511,12 @@ ctmp.dpc
      &            st_ext, st_avg,
      &            kinsol_budget, kinsol_maa,
      &            kinsol_fnorm_tol, kinsol_step_tol, kinsol_damping,
+     &            kinsol_fnorm_rtol, kinsol_trust, kinsol_rxf,
+     &            kinsol_sral,
      &            kinsol_n_iteration, kinsol_n_evaluation,
-     &            kinsol_n_sync_evaluation, kinsol_status, kinsol_flag)
+     &            kinsol_n_sync_evaluation,
+     &            kinsol_res_first, kinsol_res_min, kinsol_res_last,
+     &            kinsol_status, kinsol_flag)
                 kinsol_attempted = .true.
                 use_kinsol_now = .false.
                 if (kinsol_status .eq. B2_KINSOL_FALLBACK) then
