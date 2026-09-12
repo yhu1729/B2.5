@@ -363,6 +363,12 @@ contains
         if (size(value_in) .ne. active_state_size .or. &
             size(value_out) .ne. active_state_size) return
 
+        if (active_trust_radius .gt. 0.0_R8) then
+            if (maxval(abs(real(value_in, R8) - &
+                real(initial_state_value, R8))) .gt. &
+                active_trust_radius) return
+        end if
+
         call unpack_state(value_in, active_st, valid)
         if (.not. valid) return
 
