@@ -273,7 +273,7 @@ contains
             if (.not. returned_state_is_current) then
                 call unpack_state(state_value, st, valid)
                 if (.not. valid) then
-                    status = B2_KINSOL_FATAL
+                    status = B2_KINSOL_FALLBACK
                     goto 900
                 end if
 
