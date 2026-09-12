@@ -164,6 +164,7 @@
      &  kinsol_status, kinsol_flag
       real (kind=R8) :: kinsol_res_first, kinsol_res_min,
      &  kinsol_res_last
+      character (len=8) :: kinsol_tag
       real (kind=R8) :: nasum, na0sum
       real (kind=R8) ::
      &  rz(nCv), wrk0(nCv), wrkf(nFc)                                    !iyv 06.02.14
@@ -519,6 +520,24 @@ ctmp.dpc
      &            kinsol_status, kinsol_flag)
                 kinsol_attempted = .true.
                 use_kinsol_now = .false.
+                kinsol_tag = 'fatal'
+                if (kinsol_status .eq. B2_KINSOL_SUCCESS)
+     &            kinsol_tag = 'ok'
+                if (kinsol_status .eq. B2_KINSOL_MAXITER)
+     &            kinsol_tag = 'budget'
+                if (kinsol_status .eq. B2_KINSOL_STEP_TOL)
+     &            kinsol_tag = 'steptol'
+                if (kinsol_status .eq. B2_KINSOL_FALLBACK)
+     &            kinsol_tag = 'fallback'
+                write(*,'(a,i6,a,i6,a,i2,2a,a,i4,3(a,es9.2))')
+     &            ' KINSOL: iter ', kinsol_n_iteration,
+     &            ' eval ', kinsol_n_evaluation,
+     &            ' sync ', kinsol_n_sync_evaluation,
+     &            ' status ', trim(kinsol_tag),
+     &            ' flag ', kinsol_flag,
+     &            ' res ', kinsol_res_first,
+     &            ' -> ', kinsol_res_min,
+     &            ' last ', kinsol_res_last
                 if (kinsol_status .eq. B2_KINSOL_FALLBACK) then
                   use_kinsol_now = .false.
                 elseif (kinsol_status .eq. B2_KINSOL_FATAL) then
