@@ -2,6 +2,7 @@ module b2mod_sundials
     use b2mod_types, only: R8
     use b2mod_switches, only: switches
     use b2mod_ad, only: ncall_b2news_
+    use b2mod_numerics_namelist, only: min_na
     use b2us_geo, only: geometry
     use b2us_map, only: mapping
     use b2us_plasma, only: B2State, B2StateExt, B2Average
@@ -18,22 +19,33 @@ module b2mod_sundials
     use fnvector_serial_mod, only: & ! IGNORE
         FN_VNew_Serial
     use fkinsol_mod, only: & ! IGNORE
-        KIN_FP, KIN_SUCCESS, KIN_INITIAL_GUESS_OK, KIN_STEP_LT_STPTOL, &
-        KIN_MAXITER_REACHED, &
+        KIN_FP, KIN_SUCCESS, KIN_MAXITER_REACHED, &
         FKINSol, &
         FKINFree, FKINCreate, FKINInit, FKINSetNumMaxIters, FKINSetMAA, &
-        FKINSetDamping, FKINSetDampingAA, FKINSetReturnNewest, &
+        FKINSetDamping, FKINSetDampingAA, &
         FKINSetFuncNormTol, FKINSetScaledStepTol, FKINGetNumNonlinSolvIters
 #endif
 
     implicit none
     public
 
-    integer, parameter :: B2_KINSOL_FATAL = -1
-    integer, parameter :: B2_KINSOL_SUCCESS = 0
-    integer, parameter :: B2_KINSOL_FALLBACK = 1
-    integer, parameter :: B2_KINSOL_MAXITER = 2
-    integer, parameter :: B2_KINSOL_STEP_TOL = 3
+!   Status returned to b2mndt. The outcome of a solve is decided by the
+!   wrapper's own residual bookkeeping (see residual_is_acceptable), not by
+!   the KINSOL return flag, which is reported for information only.
+    integer, parameter :: B2_KINSOL_FATAL = -1     ! re-entrancy or SUNDIALS bookkeeping failure: abort
+    integer, parameter :: B2_KINSOL_SUCCESS = 0    ! residual target reached
+    integer, parameter :: B2_KINSOL_FALLBACK = 1   ! nothing acceptable: entry state restored, caller sweeps
+    integer, parameter :: B2_KINSOL_MAXITER = 2    ! budget exhausted, best iterate accepted by the accept factor
+    integer, parameter :: B2_KINSOL_PARTIAL = 3    ! KINSOL stopped early, best iterate accepted by the accept factor
+
+!   Per-field residual slots (transformed L-infinity over interior cells).
+    integer, parameter :: B2_KINSOL_NFIELD = 8
+    integer, parameter :: B2_KINSOL_FIELD_NA = 1, B2_KINSOL_FIELD_UA = 2, &
+        B2_KINSOL_FIELD_PO = 3, B2_KINSOL_FIELD_TE = 4, &
+        B2_KINSOL_FIELD_TI = 5, B2_KINSOL_FIELD_TN = 6, &
+        B2_KINSOL_FIELD_KT = 7, B2_KINSOL_FIELD_ZT = 8
+    character(len=2), parameter :: B2_KINSOL_FIELD_NAME(B2_KINSOL_NFIELD) = &
+        ['na', 'ua', 'po', 'te', 'ti', 'tn', 'kt', 'zt']
 
 #if defined(USE_SUNDIALS)
     logical, save :: solver_active = .false.
@@ -41,13 +53,19 @@ module b2mod_sundials
     logical, save :: active_include_tn = .true.
     logical, save :: active_include_kt = .false.
     logical, save :: active_include_zt = .false.
-    logical, save :: last_output_valid = .false.
+    logical, save :: best_output_valid = .false.
+    logical, save :: target_reached = .false.
     integer, save :: n_active_callback = 0
     integer, save :: n_active_sync = 0
+    integer, save :: n_active_projection = 0
+    integer, save :: best_evaluation = 0
+    integer, save :: best_worst_index = 0
+    integer, save :: active_iout = 0
     integer, save :: active_ncall_b2news = 0
     integer, save :: active_first_species = 0
     integer, save :: active_last_species = -1
     integer, save :: active_nCv = 0
+    integer, save :: active_nCi = 0
     integer, save :: active_nFc = 0
     integer, save :: active_nVx = 0
     integer, save :: active_ns = 0
@@ -64,9 +82,12 @@ module b2mod_sundials
     real(R8), save :: active_rxf = 0.0_R8
     real(R8), save :: active_fnorm_floor = 0.0_R8
     real(R8), save :: active_fnorm_rtol = 0.0_R8
+    real(R8), save :: active_fnorm_target = 0.0_R8
+    real(R8), save :: active_accept_factor = 0.0_R8
     real(R8), save :: active_residual_first = 0.0_R8
     real(R8), save :: active_residual_min = 0.0_R8
     real(R8), save :: active_residual_last = 0.0_R8
+    real(R8), save :: best_field_residual(B2_KINSOL_NFIELD) = 0.0_R8
     real(R8), allocatable, save :: scale_na(:), scale_ua(:)
     real(R8), allocatable, save :: unpack_buffer(:)
     real(R8), save :: scale_po = 1.0_R8
@@ -75,8 +96,14 @@ module b2mod_sundials
     real(R8), save :: scale_tn = 1.0_R8
     real(R8), save :: scale_kt = 1.0_R8
     real(R8), save :: scale_zt = 1.0_R8
+!   interior_mask(k) is true for state-vector entries that belong to an
+!   interior cell (1..nCi). Guard cells stay in the vector -- they are inputs
+!   to b2news_m and are restored exactly on fallback -- but they are excluded
+!   from every norm the solver steers by.
+    logical, allocatable, save :: interior_mask(:)
     real(c_double), allocatable, save :: initial_state_value(:)
-    real(c_double), allocatable, save :: last_output_value(:)
+    real(c_double), allocatable, save :: best_output_value(:)
+    real(c_double), allocatable, save :: projected_input_value(:)
     type(switches), pointer, save :: active_switch => null()
     type(geometry), pointer, save :: active_geo => null()
     type(mapping), pointer, save :: active_mpg => null()
@@ -97,9 +124,11 @@ contains
         st_ext, st_avg, max_iteration, maa, fnorm_tolerance, &
         fnorm_rtolerance, step_tolerance, &
         damping, trust_radius, iteration_rxf, &
-        iteration_sral, &
-        n_iteration, n_evaluation, n_sync_evaluation, &
-        residual_first, residual_min, residual_last, &
+        iteration_sral, accept_factor, damping_aa, iteration_iout, &
+        n_iteration, n_evaluation, n_sync_evaluation, n_projection, &
+        n_best_evaluation, &
+        residual_first, residual_min, residual_last, field_residual, &
+        worst_field, worst_species, worst_cell, &
         status, kinsol_flag)
         integer, intent(in) :: nCv, nFc, nVx, ns, nscx, nscxmax
         integer, intent(in) :: iscx(0:nscxmax-1), ismain, ismain0
@@ -111,11 +140,29 @@ contains
         type(B2StateExt), target, intent(inout) :: st_ext
         type(B2Average), target, intent(in) :: st_avg
         integer, intent(in) :: max_iteration, maa
+!       fnorm_tolerance: absolute floor of the residual target.
+!       fnorm_rtolerance: target = max(floor, rtol * res_first); 0 = floor only.
+!       step_tolerance: passed to FKINSetScaledStepTol for completeness only.
+!         KIN_FP in the linked SUNDIALS tests mxiter and fnormtol only, so
+!         this value has no effect on the fixed-point iteration.
+!       accept_factor: a best iterate with res_min <= accept_factor * res_first
+!         is accepted even if the target was not reached; 0 = target only.
+!       damping: damping of the plain fixed-point step (KINSetDamping).
+!       damping_aa: damping of the Anderson-accelerated step
+!         (KINSetDampingAA); <= 0 means the same value as damping.
+!       iteration_iout: 1 prints one line per map evaluation.
+!       worst_*: field slot, species (-1 if not a species field) and cell of
+!         the state-vector entry with the largest residual on the best
+!         evaluation.
         real(R8), intent(in) :: fnorm_tolerance, fnorm_rtolerance, &
-            step_tolerance, damping, trust_radius, iteration_rxf
-        integer, intent(in) :: iteration_sral
+            step_tolerance, damping, trust_radius, iteration_rxf, &
+            accept_factor, damping_aa
+        integer, intent(in) :: iteration_sral, iteration_iout
         integer, intent(out) :: n_iteration, n_evaluation, n_sync_evaluation
+        integer, intent(out) :: n_projection, n_best_evaluation
         real(R8), intent(out) :: residual_first, residual_min, residual_last
+        real(R8), intent(out) :: field_residual(B2_KINSOL_NFIELD)
+        integer, intent(out) :: worst_field, worst_species, worst_cell
         integer, intent(out) :: status, kinsol_flag
 
 #if defined(USE_SUNDIALS)
@@ -123,23 +170,33 @@ contains
         integer(c_long) :: n_nonlinear_iteration(1), maa_value
         real(c_double), pointer :: state_value(:)
         real(R8) :: effective_fnorm_tolerance, effective_step_tolerance
-        real(R8) :: saved_rxf
-        integer :: saved_sral
-        logical :: returned_state_is_current, valid
+        real(R8) :: effective_damping_aa
+        logical :: best_is_current, valid, accepted
 
         n_iteration = 0
         n_evaluation = 0
         n_sync_evaluation = 0
+        n_projection = 0
+        n_best_evaluation = 0
         residual_first = 0.0_R8
         residual_min = 0.0_R8
         residual_last = 0.0_R8
+        field_residual = 0.0_R8
+        worst_field = 0
+        worst_species = -1
+        worst_cell = 0
+        best_worst_index = 0
+        active_iout = iteration_iout
         active_residual_first = 0.0_R8
         active_residual_min = 0.0_R8
         active_residual_last = 0.0_R8
+        active_fnorm_target = 0.0_R8
+        best_field_residual = 0.0_R8
         active_trust_radius = trust_radius
         active_rxf = iteration_rxf
         active_sral = iteration_sral
         active_fnorm_rtol = fnorm_rtolerance
+        active_accept_factor = accept_factor
         status = B2_KINSOL_FALLBACK
         kinsol_flag = 0
 
@@ -150,8 +207,13 @@ contains
         end if
         if (max_iteration .lt. 1) return
 
-        call configure_active_state(switch, st, valid)
+        call configure_active_state(switch, mpg, st, valid)
         if (.not. valid) goto 900
+!       Put na inside the window b2news_m clamps it to before anything
+!       measures the state: otherwise the scales and res_first include the
+!       distance back to [na_min, na_max], which is unbounded in log
+!       variables and is not a property of the map.
+        call clamp_state_na(switch, mpg, st)
         call initialize_scale(st, valid)
         if (.not. valid) goto 900
         call ensure_active_storage(nscxmax, valid)
@@ -194,13 +256,22 @@ contains
             kinsol_flag = flag
             goto 900
         end if
+        effective_damping_aa = damping_aa
+        if (effective_damping_aa .le. 0.0_R8) effective_damping_aa = damping
         flag = FKINSetDampingAA(kinsol_memory, &
-            real(damping, c_double))
+            real(effective_damping_aa, c_double))
         if (flag .ne. KIN_SUCCESS) then
             kinsol_flag = flag
             goto 900
         end if
-        flag = FKINSetReturnNewest(kinsol_memory, 1_c_int)
+!       KINSOL's own KIN_FP convergence test measures the *update*
+!       ||u_new - u||, which is damping * ||G(u) - u|| for a plain
+!       fixed-point step and can be arbitrarily small for a degenerate
+!       Anderson step while the residual is not. It is therefore disabled
+!       here (a positive tolerance far below anything reachable; 0 would
+!       select the SUNDIALS default) and the callback stops the iteration
+!       itself when the true residual ||G(u) - u|| reaches the target.
+        flag = FKINSetFuncNormTol(kinsol_memory, tiny(1.0_c_double))
         if (flag .ne. KIN_SUCCESS) then
             kinsol_flag = flag
             goto 900
@@ -210,12 +281,8 @@ contains
             effective_fnorm_tolerance = epsilon(1.0_R8)**(1.0_R8/3.0_R8)
         end if
         active_fnorm_floor = effective_fnorm_tolerance
-        flag = FKINSetFuncNormTol(kinsol_memory, &
-            real(effective_fnorm_tolerance, c_double))
-        if (flag .ne. KIN_SUCCESS) then
-            kinsol_flag = flag
-            goto 900
-        end if
+        active_fnorm_target = effective_fnorm_tolerance
+!       No effect in KIN_FP (see the argument note); set for completeness.
         effective_step_tolerance = step_tolerance
         if (effective_step_tolerance .le. 0.0_R8) then
             effective_step_tolerance = epsilon(1.0_R8)**(2.0_R8/3.0_R8)
@@ -227,7 +294,6 @@ contains
             goto 900
         end if
 
-        active_nCv = nCv
         active_nFc = nFc
         active_nVx = nVx
         active_ns = ns
@@ -238,8 +304,11 @@ contains
         active_dtim = dtim
         n_active_callback = 0
         n_active_sync = 0
+        n_active_projection = 0
+        best_evaluation = 0
+        best_output_valid = .false.
+        target_reached = .false.
         active_ncall_b2news = ncall_b2news_
-        last_output_valid = .false.
         active_switch => switch
         active_geo => geo
         active_mpg => mpg
@@ -264,85 +333,140 @@ contains
             goto 900
         end if
 
-        select case (flag)
-        case (KIN_SUCCESS, KIN_INITIAL_GUESS_OK, KIN_STEP_LT_STPTOL, &
-            KIN_MAXITER_REACHED)
-            returned_state_is_current = n_active_callback == 0
-            if (n_active_callback .gt. 0 .and. last_output_valid) then
-                returned_state_is_current = all(state_value == last_output_value)
-            end if
-            if (.not. returned_state_is_current) then
-                call unpack_state(state_value, st, valid)
-                if (.not. valid) then
-                    status = B2_KINSOL_FALLBACK
-                    goto 900
-                end if
-
-                saved_rxf = switch%b2mndt_rxf
-                saved_sral = switch%no_b2sral_call
-                switch%b2mndt_rxf = 0.0_R8
-                if (iteration_sral .eq. 1) switch%no_b2sral_call = 0
-                ncall_b2news_ = active_ncall_b2news
-                call b2news_m(nCv, nFc, nVx, ns, nscx, iscx, nscxmax, ismain, &
-                    ismain0, dtim, switch, geo, mpg, st, st_ext, st_avg, &
-                    .false.)
-                switch%b2mndt_rxf = saved_rxf
-                switch%no_b2sral_call = saved_sral
-                n_active_sync = 1
-            end if
-
-            select case (flag)
-            case (KIN_MAXITER_REACHED)
-                status = B2_KINSOL_MAXITER
-            case (KIN_STEP_LT_STPTOL)
-                status = B2_KINSOL_STEP_TOL
-            case default
-                status = B2_KINSOL_SUCCESS
-            end select
-        case default
+!       The state handed back is always the output of the evaluation with the
+!       smallest residual, i.e. G(u*) for the u* that came closest to a fixed
+!       point -- a state that a real sweep produced. KINSOL's own returned
+!       vector is not used: it is an accelerated combination whose residual
+!       has never been evaluated, and it may be a KIN_SYSFUNC_FAIL stop that
+!       the callback requested on purpose (target reached).
+        accepted = residual_is_acceptable()
+        if (.not. accepted) then
             status = B2_KINSOL_FALLBACK
-        end select
+            goto 900
+        end if
+
+        best_is_current = best_evaluation == n_active_callback
+        if (.not. best_is_current) then
+            call unpack_state(best_output_value, st, valid)
+            if (.not. valid) then
+                status = B2_KINSOL_FALLBACK
+                goto 900
+            end if
+            call sync_derived_state(nCv, nFc, nVx, ns, nscx, iscx, nscxmax, &
+                ismain, ismain0, dtim, switch, geo, mpg, st, st_ext, st_avg, &
+                iteration_sral)
+        end if
+
+        if (target_reached) then
+            status = B2_KINSOL_SUCCESS
+        else if (flag == KIN_MAXITER_REACHED) then
+            status = B2_KINSOL_MAXITER
+        else
+            status = B2_KINSOL_PARTIAL
+        end if
 
 900 continue
         if (solver_active .and. &
             (status == B2_KINSOL_FATAL .or. &
                 status == B2_KINSOL_FALLBACK)) then
+!           Restore the entry state. The vector holds every cell, guard cells
+!           included, so the plasma fields come back exactly up to the
+!           log/exp round trip; derived quantities are rebuilt by the sync.
             call unpack_state(initial_state_value, st, valid)
             if (valid .and. n_active_callback .gt. 0) then
-                saved_rxf = switch%b2mndt_rxf
-                saved_sral = switch%no_b2sral_call
-                switch%b2mndt_rxf = 0.0_R8
-                if (iteration_sral .eq. 1) switch%no_b2sral_call = 0
-                ncall_b2news_ = active_ncall_b2news
-                call b2news_m(nCv, nFc, nVx, ns, nscx, iscx, nscxmax, &
-                    ismain, ismain0, dtim, switch, geo, mpg, st, st_ext, &
-                    st_avg, .false.)
-                switch%b2mndt_rxf = saved_rxf
-                switch%no_b2sral_call = saved_sral
-                n_active_sync = n_active_sync + 1
+                call sync_derived_state(nCv, nFc, nVx, ns, nscx, iscx, &
+                    nscxmax, ismain, ismain0, dtim, switch, geo, mpg, st, &
+                    st_ext, st_avg, iteration_sral)
             end if
         end if
         residual_first = active_residual_first
         residual_min = active_residual_min
         residual_last = active_residual_last
+        field_residual = best_field_residual
+        n_best_evaluation = best_evaluation
+        if (best_worst_index .gt. 0) call decode_index(best_worst_index, &
+            worst_field, worst_species, worst_cell)
         if (n_active_callback .gt. 0) then
             ncall_b2news_ = active_ncall_b2news + n_active_callback + &
                 n_active_sync
         end if
         n_evaluation = n_active_callback
         n_sync_evaluation = n_active_sync
+        n_projection = n_active_projection
         call clear_active_state()
 #else
         n_iteration = 0
         n_evaluation = 0
         n_sync_evaluation = 0
+        n_projection = 0
+        n_best_evaluation = 0
         residual_first = 0.0_R8
         residual_min = 0.0_R8
         residual_last = 0.0_R8
+        field_residual = 0.0_R8
+        worst_field = 0
+        worst_species = -1
+        worst_cell = 0
         status = B2_KINSOL_FATAL
         kinsol_flag = 0
 #endif
     end subroutine b2_sundials_solve
+
+#if defined(USE_SUNDIALS)
+!   One b2news_m call with rxf = 0: every block solve is set up and every
+!   derived quantity (fluxes, ne/ni/nn, transport coefficients, residuals,
+!   sources) is rebuilt for the current plasma state, but no correction is
+!   applied, so the state does not move.
+    subroutine sync_derived_state(nCv, nFc, nVx, ns, nscx, iscx, nscxmax, &
+        ismain, ismain0, dtim, switch, geo, mpg, st, st_ext, st_avg, &
+        iteration_sral)
+        integer, intent(in) :: nCv, nFc, nVx, ns, nscx, nscxmax
+        integer, intent(in) :: iscx(0:nscxmax-1), ismain, ismain0
+        real(R8), intent(in) :: dtim
+        type(switches), intent(inout) :: switch
+        type(geometry), intent(in) :: geo
+        type(mapping), intent(inout) :: mpg
+        type(B2State), intent(inout) :: st
+        type(B2StateExt), intent(inout) :: st_ext
+        type(B2Average), intent(in) :: st_avg
+        integer, intent(in) :: iteration_sral
+        real(R8) :: saved_rxf
+        integer :: saved_sral
+
+        saved_rxf = switch%b2mndt_rxf
+        saved_sral = switch%no_b2sral_call
+        switch%b2mndt_rxf = 0.0_R8
+        if (iteration_sral .eq. 1) switch%no_b2sral_call = 0
+        ncall_b2news_ = active_ncall_b2news
+        call b2news_m(nCv, nFc, nVx, ns, nscx, iscx, nscxmax, ismain, &
+            ismain0, dtim, switch, geo, mpg, st, st_ext, st_avg, .false.)
+        switch%b2mndt_rxf = saved_rxf
+        switch%no_b2sral_call = saved_sral
+        n_active_sync = n_active_sync + 1
+    end subroutine sync_derived_state
+#endif
+
+#if defined(USE_SUNDIALS)
+!   The best evaluated iterate is acceptable if its residual reached the
+!   target, or fell to accept_factor times the first residual. An iterate
+!   that never improved on res_first is never acceptable: for that one the
+!   caller's ordinary sweep is the better use of the step.
+    logical function residual_is_acceptable() result(acceptable)
+        acceptable = .false.
+        if (.not. best_output_valid) return
+        if (n_active_callback .lt. 1) return
+        if (target_reached) then
+            acceptable = .true.
+            return
+        end if
+        if (active_accept_factor .gt. 0.0_R8 .and. &
+            active_residual_first .gt. 0.0_R8) then
+            acceptable = active_residual_min .le. &
+                active_accept_factor * active_residual_first .and. &
+                active_residual_min .lt. active_residual_first
+        end if
+    end function residual_is_acceptable
+#endif
 
 #if defined(USE_SUNDIALS)
     integer(c_int) function b2_sundials_rhs_fixed_point(sunvec_in, &
@@ -350,10 +474,10 @@ contains
         type(N_Vector) :: sunvec_in, sunvec_out
         type(c_ptr), value :: user_data
         real(c_double), pointer :: value_in(:), value_out(:)
-        integer(c_int) :: tolerance_flag
-        real(R8) :: change, tolerance, saved_rxf
-        integer :: saved_sral
-        logical :: valid
+        real(R8) :: change, saved_rxf
+        real(R8) :: field_change(B2_KINSOL_NFIELD)
+        integer :: saved_sral, worst_index, field, species, cell
+        logical :: valid, projected
 
         flag = -1_c_int
         if (.not. solver_active) return
@@ -363,14 +487,26 @@ contains
             .not. associated(value_out)) return
         if (size(value_in) .ne. active_state_size .or. &
             size(value_out) .ne. active_state_size) return
+        if (.not. all(ieee_is_finite(value_in))) return
 
+!       Trust region: instead of failing the step (KIN_FP has no recovery
+!       from a callback error, so a rejection would discard every
+!       evaluation already spent), project the input onto the L-infinity
+!       ball of radius trust around the entry state and evaluate the map
+!       there. The iteration then runs on G(P(u)), which has the same fixed
+!       points as G inside the ball. The residual is still measured against
+!       the unprojected input so that KINSOL's iteration stays consistent.
+        projected = .false.
         if (active_trust_radius .gt. 0.0_R8) then
-            if (maxval(abs(real(value_in, R8) - &
-                real(initial_state_value, R8))) .gt. &
-                active_trust_radius) return
+            projected_input_value = min(max(value_in, &
+                initial_state_value - real(active_trust_radius, c_double)), &
+                initial_state_value + real(active_trust_radius, c_double))
+            projected = any(projected_input_value .ne. value_in)
+            if (projected) n_active_projection = n_active_projection + 1
+            call unpack_state(projected_input_value, active_st, valid)
+        else
+            call unpack_state(value_in, active_st, valid)
         end if
-
-        call unpack_state(value_in, active_st, valid)
         if (.not. valid) return
 
         n_active_callback = n_active_callback + 1
@@ -390,27 +526,162 @@ contains
         call pack_state(active_st, value_out, valid)
         if (.not. valid) return
 
-        change = maxval(abs(real(value_out, R8) - real(value_in, R8)))
+!       Residual ||G(u) - u|| in transformed units over interior cells only.
+        call masked_residual(value_out, value_in, change, field_change, &
+            worst_index)
         active_residual_last = change
+        if (active_iout .ne. 0) then
+            call decode_index(worst_index, field, species, cell)
+            write(*, '(a,i4,a,es9.2,a,l1,3a,i3,a,i6)') &
+                ' KINSOL: eval ', n_active_callback, ' res ', change, &
+                ' proj ', projected, ' worst ', &
+                B2_KINSOL_FIELD_NAME(max(1, field)), ' is ', species, &
+                ' cell ', cell
+        end if
         if (n_active_callback .eq. 1) then
             active_residual_first = change
-            active_residual_min = change
+            active_fnorm_target = active_fnorm_floor
             if (active_fnorm_rtol .gt. 0.0_R8) then
-                tolerance = max(active_fnorm_floor, &
+                active_fnorm_target = max(active_fnorm_floor, &
                     active_fnorm_rtol * change)
-                if (tolerance .gt. 0.0_R8) then
-                    tolerance_flag = FKINSetFuncNormTol(kinsol_memory, &
-                        real(tolerance, c_double))
-                end if
             end if
-        else
-            active_residual_min = min(active_residual_min, change)
+        end if
+        if (n_active_callback .eq. 1 .or. change .lt. active_residual_min) then
+            active_residual_min = change
+            best_output_value = value_out
+            best_field_residual = field_change
+            best_worst_index = worst_index
+            best_evaluation = n_active_callback
+            best_output_valid = .true.
         end if
 
-        last_output_value = value_out
-        last_output_valid = .true.
+        if (change .le. active_fnorm_target) then
+!           Target reached. KIN_FP offers no way for the callback to declare
+!           convergence, so stop the iteration with a negative return: KINFP
+!           breaks out with KIN_SYSFUNC_FAIL and leaves its vector alone;
+!           b2_sundials_solve ignores that vector and uses best_output_value.
+            target_reached = .true.
+            flag = -1_c_int
+            return
+        end if
+
         flag = 0_c_int
     end function b2_sundials_rhs_fixed_point
+#endif
+
+#if defined(USE_SUNDIALS)
+!   L-infinity norm of (a - b) over interior entries, total and per field.
+!   Walks the pack_state layout: na per species, ua per species, po, te, ti,
+!   tn, kt, zt, each block active_nCv long.
+    subroutine masked_residual(a, b, total, per_field, worst_index)
+        real(c_double), intent(in) :: a(:), b(:)
+        real(R8), intent(out) :: total, per_field(B2_KINSOL_NFIELD)
+        integer, intent(out) :: worst_index
+        integer :: first, last, is, field, block_arg
+        real(R8) :: block_max
+
+        per_field = 0.0_R8
+        total = 0.0_R8
+        worst_index = 0
+        first = 1
+        do is = active_first_species, active_last_species
+            call next_block(B2_KINSOL_FIELD_NA)
+        end do
+        do is = active_first_species, active_last_species
+            call next_block(B2_KINSOL_FIELD_UA)
+        end do
+        if (active_include_po) call next_block(B2_KINSOL_FIELD_PO)
+        call next_block(B2_KINSOL_FIELD_TE)
+        call next_block(B2_KINSOL_FIELD_TI)
+        if (active_include_tn) call next_block(B2_KINSOL_FIELD_TN)
+        if (active_include_kt) call next_block(B2_KINSOL_FIELD_KT)
+        if (active_include_zt) call next_block(B2_KINSOL_FIELD_ZT)
+
+    contains
+
+        subroutine next_block(slot)
+            integer, intent(in) :: slot
+            field = slot
+            last = first + active_nCv - 1
+            block_arg = maxloc(abs(real(a(first:last), R8) - &
+                real(b(first:last), R8)), dim=1, &
+                mask=interior_mask(first:last))
+            if (block_arg .ge. 1) then
+                block_max = abs(real(a(first+block_arg-1), R8) - &
+                    real(b(first+block_arg-1), R8))
+                per_field(field) = max(per_field(field), block_max)
+                if (block_max .gt. total .or. worst_index == 0) then
+                    total = block_max
+                    worst_index = first + block_arg - 1
+                end if
+            end if
+            first = last + 1
+        end subroutine next_block
+    end subroutine masked_residual
+#endif
+
+#if defined(USE_SUNDIALS)
+!   Field slot, species (-1 for non-species fields) and cell index of a
+!   state-vector entry, following the pack_state block order.
+    subroutine decode_index(index, field, species, cell)
+        integer, intent(in) :: index
+        integer, intent(out) :: field, species, cell
+        integer :: iblock, k, n_species
+
+        field = 0
+        species = -1
+        cell = 0
+        if (index .lt. 1 .or. active_nCv .lt. 1) return
+        iblock = (index - 1) / active_nCv + 1
+        cell = index - (iblock - 1) * active_nCv
+        n_species = active_last_species - active_first_species + 1
+        if (iblock .le. n_species) then
+            field = B2_KINSOL_FIELD_NA
+            species = active_first_species + iblock - 1
+            return
+        end if
+        if (iblock .le. 2 * n_species) then
+            field = B2_KINSOL_FIELD_UA
+            species = active_first_species + iblock - n_species - 1
+            return
+        end if
+        k = 2 * n_species
+        if (active_include_po) then
+            k = k + 1
+            if (iblock == k) then
+                field = B2_KINSOL_FIELD_PO
+                return
+            end if
+        end if
+        k = k + 1
+        if (iblock == k) then
+            field = B2_KINSOL_FIELD_TE
+            return
+        end if
+        k = k + 1
+        if (iblock == k) then
+            field = B2_KINSOL_FIELD_TI
+            return
+        end if
+        if (active_include_tn) then
+            k = k + 1
+            if (iblock == k) then
+                field = B2_KINSOL_FIELD_TN
+                return
+            end if
+        end if
+        if (active_include_kt) then
+            k = k + 1
+            if (iblock == k) then
+                field = B2_KINSOL_FIELD_KT
+                return
+            end if
+        end if
+        if (active_include_zt) then
+            k = k + 1
+            if (iblock == k) field = B2_KINSOL_FIELD_ZT
+        end if
+    end subroutine decode_index
 #endif
 
 #if defined(USE_SUNDIALS)
@@ -418,18 +689,24 @@ contains
         solver_active = .false.
         n_active_callback = 0
         n_active_sync = 0
-        last_output_valid = .false.
+        n_active_projection = 0
+        best_evaluation = 0
+        best_worst_index = 0
+        best_output_valid = .false.
+        target_reached = .false.
         nullify(active_switch, active_geo, active_mpg, active_st, &
             active_st_ext, active_st_avg)
     end subroutine clear_active_state
 #endif
 
 #if defined(USE_SUNDIALS)
-    subroutine configure_active_state(switch, st, valid)
+    subroutine configure_active_state(switch, mpg, st, valid)
         type(switches), intent(in) :: switch
+        type(mapping), intent(in) :: mpg
         type(B2State), intent(in) :: st
         logical, intent(out) :: valid
-        integer :: n_active_species
+        integer :: n_active_species, n_block, first, last, k, &
+            allocation_status
 
         active_first_species = max(lbound(st%pl%na, 2), switch%nsmin)
         active_last_species = min(ubound(st%pl%na, 2), switch%nsmax - 1)
@@ -439,27 +716,84 @@ contains
             ubound(st%pl%ua, 2) .ge. active_last_species
         if (.not. valid) return
 
+!       Every field block is one full cell array; all blocks must agree.
+        active_nCv = size(st%pl%na, 1)
+        valid = active_nCv .gt. 0 .and. &
+            size(st%pl%ua, 1) == active_nCv .and. &
+            size(st%pl%te) == active_nCv .and. size(st%pl%ti) == active_nCv &
+            .and. size(st%pl%po) == active_nCv .and. &
+            size(st%pl%tn) == active_nCv .and. &
+            size(st%pl%kt) == active_nCv .and. size(st%pl%zt) == active_nCv
+        if (.not. valid) return
+!       Interior cells are 1..nCi, guard cells nCi+1..nCv (b2us_map).
+        active_nCi = mpg%nCi
+        if (active_nCi .lt. 1 .or. active_nCi .gt. active_nCv) &
+            active_nCi = active_nCv
+
         active_include_po = switch%pot_eq == 1
         active_include_tn = switch%tn_style == 2
         active_include_kt = switch%solve_keps .gt. 0
         active_include_zt = switch%solve_keps .gt. 1
         n_active_species = active_last_species - active_first_species + 1
-        active_state_size = n_active_species * &
-            (size(st%pl%na, 1) + size(st%pl%ua, 1)) + &
-            size(st%pl%te) + size(st%pl%ti)
-        if (active_include_po) active_state_size = active_state_size + &
-            size(st%pl%po)
-        if (active_include_tn) active_state_size = active_state_size + &
-            size(st%pl%tn)
-        if (active_include_kt) active_state_size = active_state_size + &
-            size(st%pl%kt)
-        if (active_include_zt) active_state_size = active_state_size + &
-            size(st%pl%zt)
+        n_block = 2 * n_active_species + 2
+        if (active_include_po) n_block = n_block + 1
+        if (active_include_tn) n_block = n_block + 1
+        if (active_include_kt) n_block = n_block + 1
+        if (active_include_zt) n_block = n_block + 1
+        active_state_size = n_block * active_nCv
         valid = active_state_size .gt. 0
+        if (.not. valid) return
+
+        if (allocated(interior_mask)) then
+            if (size(interior_mask) .ne. active_state_size) &
+                deallocate(interior_mask)
+        end if
+        if (.not. allocated(interior_mask)) then
+            allocate(interior_mask(active_state_size), stat=allocation_status)
+            if (allocation_status .ne. 0) then
+                valid = .false.
+                return
+            end if
+        end if
+        interior_mask = .false.
+        do k = 1, n_block
+            first = (k - 1) * active_nCv + 1
+            last = first + active_nCi - 1
+            interior_mask(first:last) = .true.
+        end do
     end subroutine configure_active_state
 #endif
 
 #if defined(USE_SUNDIALS)
+!   The same projection of na onto [na_min, na_max] that b2news_m applies on
+!   entry to its density solve (same species range, same
+!   use_min_na_numerics branch), applied before the scales and res_first are
+!   taken so that both describe a state the map can actually return.
+    subroutine clamp_state_na(switch, mpg, st)
+        type(switches), intent(in) :: switch
+        type(mapping), intent(in) :: mpg
+        type(B2State), intent(inout) :: st
+        integer :: is, iCv
+        real(R8) :: na_min
+
+        do is = active_first_species, active_last_species
+            do iCv = 1, active_nCv
+                if (switch%use_min_na_numerics .eq. 0) then
+                    na_min = switch%b2mndr_na_min
+                else
+                    na_min = min_na(is, mpg%cvReg(iCv))
+                end if
+                st%pl%na(iCv, is) = min(max(st%pl%na(iCv, is), na_min), &
+                    switch%b2mndr_na_max)
+            end do
+        end do
+    end subroutine clamp_state_na
+#endif
+
+#if defined(USE_SUNDIALS)
+!   Per-field scales from the interior cells of the entry state, so that a
+!   guard cell holding a boundary value far outside the interior range
+!   cannot set the units of every unknown of that field.
     subroutine initialize_scale(st, valid)
         type(B2State), intent(in) :: st
         logical, intent(out) :: valid
@@ -492,16 +826,15 @@ contains
         scale_index = 0
         do is = active_first_species, active_last_species
             scale_index = scale_index + 1
-            scale_na(scale_index) = maxval(abs(st%pl%na(:, is)))
-            scale_ua(scale_index) = maxval(abs(st%pl%ua(:, is)))
-            if (scale_ua(scale_index) .le. 0.0_R8) scale_ua(scale_index) = 1.0_R8
+            scale_na(scale_index) = get_field_scale(st%pl%na(1:active_nCi, is))
+            scale_ua(scale_index) = get_field_scale(st%pl%ua(1:active_nCi, is))
         end do
-        scale_po = get_field_scale(st%pl%po)
-        scale_te = get_field_scale(st%pl%te)
-        scale_ti = get_field_scale(st%pl%ti)
-        if (active_include_tn) scale_tn = get_field_scale(st%pl%tn)
-        if (active_include_kt) scale_kt = get_field_scale(st%pl%kt)
-        if (active_include_zt) scale_zt = get_field_scale(st%pl%zt)
+        scale_po = get_field_scale(st%pl%po(1:active_nCi))
+        scale_te = get_field_scale(st%pl%te(1:active_nCi))
+        scale_ti = get_field_scale(st%pl%ti(1:active_nCi))
+        if (active_include_tn) scale_tn = get_field_scale(st%pl%tn(1:active_nCi))
+        if (active_include_kt) scale_kt = get_field_scale(st%pl%kt(1:active_nCi))
+        if (active_include_zt) scale_zt = get_field_scale(st%pl%zt(1:active_nCi))
     end subroutine initialize_scale
 #endif
 
@@ -525,8 +858,11 @@ contains
         call ensure_c_double_buffer(initial_state_value, active_state_size, &
             valid)
         if (.not. valid) return
-        call ensure_c_double_buffer(last_output_value, active_state_size, &
+        call ensure_c_double_buffer(best_output_value, active_state_size, &
             valid)
+        if (.not. valid) return
+        call ensure_c_double_buffer(projected_input_value, &
+            active_state_size, valid)
     end subroutine ensure_active_storage
 #endif
 
@@ -836,29 +1172,29 @@ contains
 #endif
 
 #if defined(USE_SUNDIALS)
-subroutine pack_positive(field, scale, buffer, first)
-    real(R8), intent(in) :: field(:), scale
-    real(c_double), intent(inout) :: buffer(:)
-    integer, intent(inout) :: first
-    integer :: last
+    subroutine pack_positive(field, scale, buffer, first)
+        real(R8), intent(in) :: field(:), scale
+        real(c_double), intent(inout) :: buffer(:)
+        integer, intent(inout) :: first
+        integer :: last
 
-    last = first + size(field) - 1
-    buffer(first:last) = real(log(field) - log(scale), c_double)
-    first = last + 1
-  end subroutine pack_positive
+        last = first + size(field) - 1
+        buffer(first:last) = real(log(field) - log(scale), c_double)
+        first = last + 1
+    end subroutine pack_positive
 #endif
 
 #if defined(USE_SUNDIALS)
-  subroutine pack_signed(field, scale, buffer, first)
-    real(R8), intent(in) :: field(:), scale
-    real(c_double), intent(inout) :: buffer(:)
-    integer, intent(inout) :: first
-    integer :: last
+    subroutine pack_signed(field, scale, buffer, first)
+        real(R8), intent(in) :: field(:), scale
+        real(c_double), intent(inout) :: buffer(:)
+        integer, intent(inout) :: first
+        integer :: last
 
-    last = first + size(field) - 1
-    buffer(first:last) = real(asinh(field / scale), c_double)
-    first = last + 1
-  end subroutine pack_signed
+        last = first + size(field) - 1
+        buffer(first:last) = real(asinh(field / scale), c_double)
+        first = last + 1
+    end subroutine pack_signed
 #endif
 
 #if defined(USE_SUNDIALS)
@@ -866,7 +1202,7 @@ subroutine pack_positive(field, scale, buffer, first)
         type(B2State), intent(in) :: st
         real(c_double), intent(out) :: buffer(:)
         logical, intent(out) :: valid
-        integer :: first, last, is, scale_index
+        integer :: first, is, scale_index
 
         valid = size(buffer) == active_state_size
         if (.not. valid) return
@@ -877,18 +1213,14 @@ subroutine pack_positive(field, scale, buffer, first)
         scale_index = 0
         do is = active_first_species, active_last_species
             scale_index = scale_index + 1
-            last = first + size(st%pl%na, 1) - 1
-            buffer(first:last) = real(log(st%pl%na(:, is)) - &
-                log(scale_na(scale_index)), c_double)
-            first = last + 1
+            call pack_positive(st%pl%na(:, is), scale_na(scale_index), &
+                buffer, first)
         end do
         scale_index = 0
         do is = active_first_species, active_last_species
             scale_index = scale_index + 1
-            last = first + size(st%pl%ua, 1) - 1
-            buffer(first:last) = real(asinh(st%pl%ua(:, is) / &
-                scale_ua(scale_index)), c_double)
-            first = last + 1
+            call pack_signed(st%pl%ua(:, is), scale_ua(scale_index), &
+                buffer, first)
         end do
         if (active_include_po) &
             call pack_signed(st%pl%po, scale_po, buffer, first)
@@ -913,8 +1245,10 @@ subroutine pack_positive(field, scale, buffer, first)
     if (allocated(scale_na)) deallocate(scale_na)
     if (allocated(scale_ua)) deallocate(scale_ua)
     if (allocated(unpack_buffer)) deallocate(unpack_buffer)
+    if (allocated(interior_mask)) deallocate(interior_mask)
     if (allocated(initial_state_value)) deallocate(initial_state_value)
-    if (allocated(last_output_value)) deallocate(last_output_value)
+    if (allocated(best_output_value)) deallocate(best_output_value)
+    if (allocated(projected_input_value)) deallocate(projected_input_value)
 #endif
     end subroutine b2_sundials_finalize
 
