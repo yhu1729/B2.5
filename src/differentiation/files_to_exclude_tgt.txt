@@ -132,3 +132,6 @@
   invert_matrix
   b2optim_tao
   fortranAdaptor
+  b2mod_sdc
+  b2mod_sdc_quad
+  b2mod_mms_analytic

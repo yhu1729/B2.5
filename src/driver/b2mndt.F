@@ -27,7 +27,8 @@
       use b2mod_sundials
      & , only : b2_sundials_solve,
      &          B2_KINSOL_SUCCESS, B2_KINSOL_FATAL, B2_KINSOL_FALLBACK,
-     &          B2_KINSOL_MAXITER, B2_KINSOL_STEP_TOL
+     &          B2_KINSOL_MAXITER, B2_KINSOL_PARTIAL, B2_KINSOL_NFIELD,
+     &          B2_KINSOL_FIELD_NAME
 #ifndef NAGFOR
 ! csc The following are not necessary for computation but are needed
 !     for adjoint AD to avoid side-effect variables
@@ -155,15 +156,25 @@
       real (kind=R8), save :: kinsol_trust = 0.0_R8
       real (kind=R8), save :: kinsol_rxf = 0.0_R8
       integer, save :: kinsol_sral = 1
+      real (kind=R8), save :: kinsol_accept = 0.1_R8
+      real (kind=R8), save :: kinsol_damping_aa = 0.0_R8
+      integer, save :: kinsol_iout = 0
+      integer, save :: kinsol_max_fail = 0
+      integer, save :: kinsol_skip = 10
+      integer, save :: kinsol_n_consecutive_fail = 0
+      integer, save :: kinsol_skip_remaining = 0
       logical domoqt, wrong_flow                                         !xpb
       logical quit_residual, main_call,
      &  kinsol_done, use_kinsol_now, kinsol_attempted
       integer istg(0:2), is, k
       integer kinsol_n_iteration, kinsol_n_evaluation,
-     &  kinsol_n_sync_evaluation, kinsol_work,
+     &  kinsol_n_sync_evaluation, kinsol_n_projection,
+     &  kinsol_n_best, kinsol_work,
      &  kinsol_status, kinsol_flag
       real (kind=R8) :: kinsol_res_first, kinsol_res_min,
-     &  kinsol_res_last
+     &  kinsol_res_last, kinsol_field_res(B2_KINSOL_NFIELD)
+      integer kinsol_worst_field, kinsol_worst_species,
+     &  kinsol_worst_cell
       character (len=8) :: kinsol_tag
       real (kind=R8) :: nasum, na0sum
       real (kind=R8) ::
@@ -207,6 +218,11 @@
        call ipgetr ('b2mndt_kinsol_trust', kinsol_trust)
        call ipgetr ('b2mndt_kinsol_rxf', kinsol_rxf)
        call ipgeti ('b2mndt_kinsol_sral', kinsol_sral)
+       call ipgetr ('b2mndt_kinsol_accept', kinsol_accept)
+       call ipgetr ('b2mndt_kinsol_damping_aa', kinsol_damping_aa)
+       call ipgeti ('b2mndt_kinsol_iout', kinsol_iout)
+       call ipgeti ('b2mndt_kinsol_max_fail', kinsol_max_fail)
+       call ipgeti ('b2mndt_kinsol_skip', kinsol_skip)
        call xertst (use_kinsol .eq. 0 .or. use_kinsol .eq. 1,
      &   'b2mndt_use_kinsol should be 0 or 1')
        call xertst (kinsol_budget .ge. 1,
@@ -230,9 +246,24 @@
      &   'b2mndt_kinsol_rxf should be in [0,1]')
        call xertst (kinsol_sral .eq. 0 .or. kinsol_sral .eq. 1,
      &   'b2mndt_kinsol_sral should be 0 or 1')
-       if(switch%equation_sources.ne.0)
+       call xertst (kinsol_accept .ge. 0.0_R8 .and.
+     &   kinsol_accept .lt. 1.0_R8,
+     &   'b2mndt_kinsol_accept should be in [0,1)')
+       call xertst (kinsol_damping_aa .le. 1.0_R8,
+     &   'b2mndt_kinsol_damping_aa should be '//
+     &   'at most 1 (<= 0: = damping)')
+       call xertst (kinsol_iout .eq. 0 .or. kinsol_iout .eq. 1,
+     &   'b2mndt_kinsol_iout should be 0 or 1')
+       call xertst (kinsol_max_fail .ge. 0,
+     &   'b2mndt_kinsol_max_fail should be nonnegative (0: never skip)')
+       call xertst (kinsol_skip .ge. 1,
+     &   'b2mndt_kinsol_skip should be at least 1')
+*      b2mndt_kinsol_step_tol is read and passed on for completeness only:
+*      KIN_FP in the linked SUNDIALS stops on the iteration budget and on
+*      the residual target, never on the scaled step.
+       if(switch%equation_sources.ne.0.and.switch%use_mms.ne.3)
      &  call read_equation_sources(nCv, ns, switch, itim, mpg)
-       if(switch%boundary_sources.ne.0)
+       if(switch%boundary_sources.ne.0.and.switch%use_mms.ne.3)
      &  call read_boundary_sources(nCv, ns, switch, itim, mpg)          !srv 26.02.18 }
        call ipgeti ('b2mndt_av_ntim_batch', ntim_batch)
        call ipgeti ('b2mndt_av_batch_all', ibatch_av_all)
@@ -447,22 +478,8 @@ ctmp.dpc
      &       st%dv%kinrgy, st%pl%kt, st%pl%zt, st%sr, .false.)
           endif
 
-          if(switch%equation_sources.ne.0) then                          !srv 26.02.18 {
-            do iCv = 1,mpg%nCi
-              st%sr%sna(iCv,0:1,0:ns-1) = st%sr%sna(iCv,0:1,0:ns-1)+
-     &          geo%cvVol(iCv)*art_sna(iCv,0:1,0:ns-1)
-              st%sr%smo(iCv,0:3,0:ns-1) = st%sr%smo(iCv,0:3,0:ns-1)+
-     &          geo%cvVol(iCv)*geo%cvHz(iCv)*art_smo(iCv,0:3,0:ns-1)
-              st%sr%she(iCv,0:3) = st%sr%she(iCv,0:3)+
-     &          geo%cvVol(iCv)*art_she(iCv,0:3)
-              st%sr%shi(iCv,0:3) = st%sr%shi(iCv,0:3)+
-     &          geo%cvVol(iCv)*art_shi(iCv,0:3)
-              st%sr%shn(iCv,0:3) = st%sr%shn(iCv,0:3)+
-     &          geo%cvVol(iCv)*art_shn(iCv,0:3)
-              st%sr%sch(iCv,0:3) = st%sr%sch(iCv,0:3)+
-     &          geo%cvVol(iCv)*art_sch(iCv,0:3)
-            enddo
-          endif                                                          !srv 26.02.18 }
+*         (the manufactured equation sources, if any, are added inside
+*          b2sral so that in-sweep re-linearisation keeps them)
 *     ..stabilise the source coefficients
           if(switch%b2mndt_style.ne.2.and.use_b2srst.eq.1)
      &     call b2srst (nCv, ns, switch, st%pl%na, st%pl%ua,            !srv 01.07.08
@@ -504,6 +521,17 @@ ctmp.dpc
 *      ..Anderson acceleration needs a stationary fixed-point map. Enter
 *        KINSOL when the drift/ExB/viscosity ramps have reached their
 *        targets.
+*      ..retry cadence: after b2mndt_kinsol_max_fail consecutive fallback
+*        steps, skip KINSOL for b2mndt_kinsol_skip timesteps so that a
+*        map that is not contracting at this dtim does not cost
+*        budget + 1 sweeps on every step.
+              if (use_kinsol_now .and. .not. kinsol_attempted .and.
+     &            kinsol_skip_remaining .gt. 0) then
+                kinsol_skip_remaining = kinsol_skip_remaining - 1
+                use_kinsol_now = .false.
+                write(*,'(a,i4,a)') ' KINSOL: skipped, ',
+     &            kinsol_skip_remaining, ' more steps to skip'
+              endif
               if (use_kinsol_now .and.
      &            .not. kinsol_attempted .and.
      &            b2news_ramp_is_stationary(switch)) then
@@ -513,10 +541,14 @@ ctmp.dpc
      &            kinsol_budget, kinsol_maa,
      &            kinsol_fnorm_tol, kinsol_fnorm_rtol, kinsol_step_tol,
      &            kinsol_damping, kinsol_trust, kinsol_rxf,
-     &            kinsol_sral,
+     &            kinsol_sral, kinsol_accept, kinsol_damping_aa,
+     &            kinsol_iout,
      &            kinsol_n_iteration, kinsol_n_evaluation,
-     &            kinsol_n_sync_evaluation,
+     &            kinsol_n_sync_evaluation, kinsol_n_projection,
+     &            kinsol_n_best,
      &            kinsol_res_first, kinsol_res_min, kinsol_res_last,
+     &            kinsol_field_res, kinsol_worst_field,
+     &            kinsol_worst_species, kinsol_worst_cell,
      &            kinsol_status, kinsol_flag)
                 kinsol_attempted = .true.
                 use_kinsol_now = .false.
@@ -525,28 +557,62 @@ ctmp.dpc
      &            kinsol_tag = 'ok'
                 if (kinsol_status .eq. B2_KINSOL_MAXITER)
      &            kinsol_tag = 'budget'
-                if (kinsol_status .eq. B2_KINSOL_STEP_TOL)
-     &            kinsol_tag = 'steptol'
+                if (kinsol_status .eq. B2_KINSOL_PARTIAL)
+     &            kinsol_tag = 'partial'
                 if (kinsol_status .eq. B2_KINSOL_FALLBACK)
      &            kinsol_tag = 'fallback'
-                write(*,'(a,i6,a,i6,a,i2,2a,a,i4,3(a,es9.2))')
+*      ..res: first residual, best residual (the state handed back is the
+*        output of the evaluation that produced the best), last residual;
+*        proj: evaluations whose input was projected onto the trust ball.
+                write(*,'(a,i6,a,i6,a,i2,a,i4,2a,a,i4,3(a,es9.2),a,i4)')
      &            ' KINSOL: iter ', kinsol_n_iteration,
      &            ' eval ', kinsol_n_evaluation,
      &            ' sync ', kinsol_n_sync_evaluation,
+     &            ' proj ', kinsol_n_projection,
      &            ' status ', trim(kinsol_tag),
      &            ' flag ', kinsol_flag,
      &            ' res ', kinsol_res_first,
      &            ' -> ', kinsol_res_min,
-     &            ' last ', kinsol_res_last
+     &            ' last ', kinsol_res_last,
+     &            ' best ', kinsol_n_best
+                if (kinsol_status .ne. B2_KINSOL_FATAL) then
+                  write(*,'(a,8(a,es8.1),3a,i3,a,i6)')
+     &              ' KINSOL: field res',
+     &              ' na ', kinsol_field_res(1),
+     &              ' ua ', kinsol_field_res(2),
+     &              ' po ', kinsol_field_res(3),
+     &              ' te ', kinsol_field_res(4),
+     &              ' ti ', kinsol_field_res(5),
+     &              ' tn ', kinsol_field_res(6),
+     &              ' kt ', kinsol_field_res(7),
+     &              ' zt ', kinsol_field_res(8),
+     &              ' worst ', B2_KINSOL_FIELD_NAME(
+     &                max(1, kinsol_worst_field)),
+     &              ' is ', kinsol_worst_species,
+     &              ' cell ', kinsol_worst_cell
+                endif
                 if (kinsol_status .eq. B2_KINSOL_FALLBACK) then
                   use_kinsol_now = .false.
+                  kinsol_n_consecutive_fail =
+     &              kinsol_n_consecutive_fail + 1
+                  if (kinsol_max_fail .gt. 0 .and.
+     &                kinsol_n_consecutive_fail .ge. kinsol_max_fail)
+     &            then
+                    kinsol_skip_remaining = kinsol_skip
+                    kinsol_n_consecutive_fail = 0
+                    write(*,'(a,i4,a,i4,a)')
+     &                ' KINSOL: warning: ', kinsol_max_fail,
+     &                ' consecutive fallbacks, skipping KINSOL for ',
+     &                kinsol_skip, ' steps (legacy sweep at this dtim)'
+                  endif
                 elseif (kinsol_status .eq. B2_KINSOL_FATAL) then
                   call xerrab('KINSOL fail: abort')
                 else
                   kinsol_done = .true.
+                  kinsol_n_consecutive_fail = 0
                   if (kinsol_status .ne. B2_KINSOL_SUCCESS .and.
      &                kinsol_status .ne. B2_KINSOL_MAXITER .and.
-     &                kinsol_status .ne. B2_KINSOL_STEP_TOL) then
+     &                kinsol_status .ne. B2_KINSOL_PARTIAL) then
                     call xerrab('invalid KINSOL status')
                   endif
                 endif

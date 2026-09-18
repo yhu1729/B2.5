@@ -130,3 +130,6 @@
   b2mwmv
   b2mod_create_afn_bc_tables
   invert_matrix
+  b2mod_sdc
+  b2mod_sdc_quad
+  b2mod_mms_analytic

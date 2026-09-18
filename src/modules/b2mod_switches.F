@@ -2660,6 +2660,20 @@ c b2mndt
      &   'faulty internal parameter ntim_step_out')
       call xertst (1.le.s%calc_err_step_out,
      &   'faulty internal parameter calc_err_step_out')
+      call xertst (0.le.s%use_mms.and.s%use_mms.le.3,
+     &   'b2mndr_use_mms should be 0, 1, 2 or 3')
+      if (s%use_mms.eq.3) then
+*       analytic manufactured solution (b2mod_mms_analytic): the sources
+*       and boundary values live in the equation/boundary source arrays
+        s%equation_sources = 1
+        s%boundary_sources = 1
+        call xertst (s%b2mndt_style.eq.2,
+     &   'b2mndr_use_mms = 3 needs b2mndt_style = 2')
+        call xertst (s%pot_eq.eq.1,
+     &   'b2mndr_use_mms = 3 needs b2news_poteq = 1')
+        call xertst (s%b2nppo_restr_po.eq.0.0_R8,
+     &   'b2mndr_use_mms = 3 needs b2nppo_restr_po = 0')
+      endif
 
 c b2mndr
        call xertst (0.0.le.s%b2mndr_hz .and. 1.0.ge.s%b2mndr_hz,

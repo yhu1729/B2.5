@@ -324,7 +324,10 @@ c***  Standard set-up:
             end do
           end if
       end if
-      if (.not.found .and. m%hasTopologicalData) then
+*     no separatrix on this grid (e.g. a slab without X-point or core
+*     region): fall back to the first available flux surface as well
+      if (.not.found .and. (m%hasTopologicalData .or.
+     &    (m%iFssep.eq.0 .and. m%iFssep2.eq.0))) then
         print *, 'read_b2mod_user_namelist: no OMP separatrix, ' //
      &    'using first available flux surface'
         ic = 1
@@ -729,8 +732,8 @@ c*** Set default values according to current species list
           ft_ds_imp(iFt) = fs_ds_imp(iFs1)+0.5_R8*geo%cvHy(imp(ic))
         end if
       end do
-      if (m%isClassicalGrid.eq.1) call xertst(m%fsFcP(m%iFssep,2).gt.0,
-     & 'No separatrix faces!')
+      if (m%isClassicalGrid.eq.1 .and. m%iFssep.gt.0)
+     &  call xertst(m%fsFcP(m%iFssep,2).gt.0, 'No separatrix faces!')
       write(*,*) 'SEPARATRIX FLUX SURFACE AT iFs=',m%iFssep
       if (m%iFssep2.gt.0) then
         write(*,*) 'SECOND HALF OF CDN SEPARATRIX FLUX SURFACE AT iFs=',

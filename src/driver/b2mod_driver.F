@@ -67,6 +67,8 @@
       use b2mod_switches
       use b2us_map
       use b2mod_sundials, only : b2_sundials_finalize
+      use b2mod_sdc, only : b2step
+      use b2mod_mms_analytic, only : mms_init, mms_set_plasma_state
       use b2us_geo
       use b2us_plasma
       use b2mod_plasma_netcdf
@@ -2049,6 +2051,13 @@ c   --> better way doing this is necessary)
         call write_b2fstate (70, nCv, nFc, ns, state)
         close(70)
       endif                                                              !srv 04.02.15 }
+*   ..analytic manufactured solution: initial state at the start time
+*     (after the charge states rza have been initialised above)
+      if (switch%use_mms.eq.3) then
+        call mms_init(nCv, ns, geo, mpg)
+        call mms_set_plasma_state(max(switch%b2mndr_stim,0.0_R8), nCv,
+     &    ns, geo, state%rt%rza, state_ext%ne, state%pl, state%dv)
+      endif
 *   ..compute initial ni
       call b2xpni (nCv, ns, state%pl%na, state%dv%ni)
       call b2xpnn (nCv, ns, state%pl%na, state%dv%nn)
@@ -2182,7 +2191,7 @@ c new CDF movie option (1st frame at t=0)
         switch%nstg(0) = 1
         switch%nstg(1) = 1
         switch%nstg(2) = 1
-        call b2mndt (nout, nCv, nFc, nVx, ns,
+        call b2step (nout, nCv, nFc, nVx, ns,
      &       ismain, ismain0, state%rt%nscx, state%rt%nscxmax,
      &       state%rt%iscx, itim, dtim, ntim,
      &       switch, geo, mpg, state, state_ext, state_avg, ierr)
@@ -2416,7 +2425,7 @@ csw 09oct2012 set default potential already at this point (BCs)
           write(*,'(1x,a,i9,1p,g14.7,i9,i3)')
      .     'b2mndr_ok:itim,dtim,ntim,stack_ptr',
      1                itim,dtim,ntim,stack_ptr
-          call b2mndt (nout, nCv, nFc, nVx, ns,
+          call b2step (nout, nCv, nFc, nVx, ns,
      .      ismain, ismain0, state%rt%nscx, state%rt%nscxmax,
      .      state%rt%iscx, itim, dtim, ntim,
      .      switch, geo, mpg, state, state_ext, state_avg, ierr)

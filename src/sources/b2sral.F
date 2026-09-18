@@ -19,6 +19,7 @@
       use b2us_geo
       use b2us_map
       use b2us_plasma
+      use b2mod_equation_sources                                        !srv 26.02.18
       use b2mod_ad
      & , only : b2sral_elm_count, ncall_b2sral, sources_inputfile
 #ifndef NAGFOR
@@ -518,6 +519,26 @@ csw 17oct2012, erase sna, smo, smq, (she, shi, sch) for fluid neutrals
         endif
        enddo
       endif
+
+*   ..add the manufactured (MMS) sources; done here rather than in b2mndt
+*     so that a re-linearisation inside the sweeps (b2news_m, KINSOL
+*     with b2mndt_kinsol_sral = 1) keeps them
+      if(switch%equation_sources.ne.0) then                              !srv 26.02.18 {
+        do iCv = 1,mpg%nCi
+          st%sr%sna(iCv,0:1,0:ns-1) = st%sr%sna(iCv,0:1,0:ns-1)+
+     &      geo%cvVol(iCv)*art_sna(iCv,0:1,0:ns-1)
+          st%sr%smo(iCv,0:3,0:ns-1) = st%sr%smo(iCv,0:3,0:ns-1)+
+     &      geo%cvVol(iCv)*geo%cvHz(iCv)*art_smo(iCv,0:3,0:ns-1)
+          st%sr%she(iCv,0:3) = st%sr%she(iCv,0:3)+
+     &      geo%cvVol(iCv)*art_she(iCv,0:3)
+          st%sr%shi(iCv,0:3) = st%sr%shi(iCv,0:3)+
+     &      geo%cvVol(iCv)*art_shi(iCv,0:3)
+          st%sr%shn(iCv,0:3) = st%sr%shn(iCv,0:3)+
+     &      geo%cvVol(iCv)*art_shn(iCv,0:3)
+          st%sr%sch(iCv,0:3) = st%sr%sch(iCv,0:3)+
+     &      geo%cvVol(iCv)*art_sch(iCv,0:3)
+        enddo
+      endif                                                              !srv 26.02.18 }
 
 * ..return
       if(ncall_b2sral.eq.0 .or. main_call) ncall_b2sral = ncall_b2sral+1

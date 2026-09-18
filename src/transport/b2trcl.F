@@ -624,10 +624,11 @@ c     &   '21-moment viscosity already includes parallel viscosity!')
         collisnumef = 1.0_R8
       endif
 
+*   .. pre-compute poloidal differences of te, ti (dte is also needed by
+*      the calf flux limit below, which does not depend on conductive_limit)
+      call diff_p(nCv, nFc, nVx, 0, geo, mpg, pl%te, wrkv, dte)
+      call diff_p(nCv, nFc, nVx, 0, geo, mpg, pl%ti, wrkv, dti)
       if(switch%conductive_limit.ne.0) then                           !srv 16.06.08 {
-*   .. pre-compute poloidal differences of te, ti
-       call diff_p(nCv, nFc, nVx, 0, geo, mpg, pl%te, wrkv, dte)
-       call diff_p(nCv, nFc, nVx, 0, geo, mpg, pl%ti, wrkv, dti)
 *   .. apply the conductive limit of parallel electron heat flux      !srv 03.06.03 {
        if(cflim(0).ne.0.0_R8) then
         do iFc = 1, nFc

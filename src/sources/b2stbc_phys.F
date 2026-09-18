@@ -116,6 +116,7 @@
      *  gOnedBsq(nFc,0:1),
      &  sna0_no_mdf(nCv,0:1,0:ns-1)
       real (kind=R8), save :: cor9 = 0.0_R8                             !srv 23.09.08
+      real (kind=R8), save :: pbig_factor = 1.0_R8   ! b2stbc_pbig_factor: multiplier of the BCPOT=7 penalty
       real (kind=R8) :: fac_he_anom, fac_he_anom_bc
       character chns*3, chk*1                                           !srv 11.07.05
 #ifdef WG_TODO
@@ -241,7 +242,12 @@ c       call ipgeti ('b2stbc_average_pr', istyle_average_pr)         !srv 08.08.
       UP00=SQRT(100*EV/MP)
       UBIG=UP00 / EPSLON
       VBIG=1.0e-2_R8*UBIG
-      PBIG=UP00
+      if (ncall_b2stbc_phys.eq.0) then
+        call ipgetr ('b2stbc_pbig_factor', pbig_factor)
+        call xertst (pbig_factor.gt.0.0_R8,
+     &   'b2stbc_pbig_factor should be positive')
+      endif
+      PBIG=UP00*pbig_factor
 
       sna0_no_mdf = 0.0_R8
 

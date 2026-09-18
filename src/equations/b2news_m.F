@@ -493,7 +493,7 @@ c b2npmo with rxf = 0 and recompute fluxes.
 csw 10dec2012: added extra call if wanted/not-wanted (SOLPS4 has an
 c   extra call at this place within internal iteration)
       if(switch%no_b2sral_call .eq. 0) then
-        write(*,*) ' re-compute source '
+        if(switch%b2news_iout.ne.0) write(*,*) ' re-compute source '
 *     ..re-compute source linearisation                                  !xpb
         call b2sral (nCv, nFc, nVx, ns,
      &    nscx, nscxmax, iscx, ismain, ismain0, dtim,
@@ -524,13 +524,20 @@ c   extra call at this place within internal iteration)
      &    st%pl%na, st%pl%ua, st%pl%te, st%pl%ti,
      &    st%dv%ne, st%dv%ni, st%dv%nn, st%sr, .false.)
 *     ..include contributions due to timestep                            !xpb
-        call b2srdt (nCv, ns, dtim, switch, geo, mpg, st%dv,
-     &    st%psnc%na, st%psnc%ua, st%psnc%te, st%psnc%ti, st%psnc%tn,
-     &    st%psnc%ne, st%psnc%ni, st%psnc%nn, st%psnc%kinrgy,
-     &    st%psnc%kt, st%psnc%zt,                                        !srv 23.07.21
-     &    st%pl%na, st%pl%ua, st%pl%te, st%pl%ti, st%pl%tn, st%dv%ne,
-     &    st%dv%ni, st%dv%nn, st%dv%kinrgy, st%pl%kt, st%pl%zt, st%sr,
-     &    .false.)                                                       !srv 23.07.21
+*       For b2mndt_style = 2 the time derivative is built inside the
+*       equation solvers (b2scdt/b2smdt/b2shdt add sr%snadt etc. to the
+*       sources), so b2srdt must not fold it into sr%sna as well: that
+*       would count it twice and solve a step of dtim/2. Same guard as
+*       the b2srdt call in b2mndt.
+        if (switch%b2mndt_style.ne.2) then
+          call b2srdt (nCv, ns, dtim, switch, geo, mpg, st%dv,
+     &      st%psnc%na, st%psnc%ua, st%psnc%te, st%psnc%ti, st%psnc%tn,
+     &      st%psnc%ne, st%psnc%ni, st%psnc%nn, st%psnc%kinrgy,
+     &      st%psnc%kt, st%psnc%zt,                                      !srv 23.07.21
+     &      st%pl%na, st%pl%ua, st%pl%te, st%pl%ti, st%pl%tn, st%dv%ne,
+     &      st%dv%ni, st%dv%nn, st%dv%kinrgy, st%pl%kt, st%pl%zt, st%sr,
+     &      .false.)                                                     !srv 23.07.21
+        endif
 *     ..stabilise the source coefficients                                !xpb
         call b2srst (nCv, ns, switch,
      &    st%pl%na, st%pl%ua, st%pl%te, st%pl%ti, st%pl%tn, st%pl%po,    !srv 01.07.08
